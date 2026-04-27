@@ -3,58 +3,70 @@ import google.generativeai as genai
 import pypdf
 import json
 
-# Configuración de la página
 st.set_page_config(page_title="Ramale Exam Center", page_icon="🏥", layout="centered")
 
-# Estilo personalizado
+# Estilo Premium
 st.markdown("""
     <style>
     .stApp { background-color: #FAF9F6; }
-    .stButton>button { background-color: #B87333; color: white; border-radius: 10px; }
-    h1 { color: #5D4037; }
+    .stButton>button { background-color: #B87333; color: white; border-radius: 10px; width: 100%; }
+    h1 { color: #5D4037; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🏥 Generador Quirúrgico Dinámico")
-st.subheader("Preparación para el Examen de Consejo 2027")
+st.title("🏥 Ramale Exam Center")
+st.subheader("Simulador de Consejo de Cirugía Plástica")
 
 with st.sidebar:
     st.header("Configuración")
-    api_key = st.text_input("Gemini API Key", type="password")
-    uploaded_file = st.file_uploader("Cargar capítulo PDF", type="pdf")
-    num_preguntas = st.slider("Número de preguntas", 3, 20, 5)
-    dificultad = st.selectbox("Nivel de exigencia", ["Básico", "Intermedio", "Avanzado", "Consejo-level"])
-    tipo_examen = st.multiselect("Tipos de pregunta", ["Opción Múltiple", "Respuesta Abierta"], default=["Opción Múltiple"])
+    # El .strip() elimina espacios accidentales al pegar la clave
+    api_input = st.text_input("Gemini API Key", type="password").strip()
+    uploaded_file = st.file_uploader("Cargar PDF Quirúrgico", type="pdf")
+    num_preguntas = st.slider("Preguntas", 3, 15, 5)
+    dificultad = st.selectbox("Nivel", ["Residente R1-R2", "Jefe de Residentes", "Consejo-level"])
 
-if uploaded_file and api_key:
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    reader = pypdf.PdfReader(uploaded_file)
-    text_content = ""
-    for page in reader.pages:
-        text_content += page.extract_text()
-    
-    if st.button("Generar Nuevo Examen"):
-        with st.spinner("Analizando literatura quirúrgica..."):
-            prompt = f"Actúa como sinodal de cirugía plástica. Basado en: {text_content[:15000]}. Genera {num_preguntas} preguntas de nivel {dificultad}. Tipos: {tipo_examen}. Formato JSON estricto: [{{'id': 1, 'tipo': 'opción múltiple/abierta', 'pregunta': '', 'opciones': [], 'correcta': ''}}]"
-            response = model.generate_content(prompt)
-            clean_json = response.text.replace('```json', '').replace('```', '').strip()
-            st.session_state.examen = json.loads(clean_json)
-            st.session_state.respuestas = {}
+if uploaded_file and api_input:
+    try:
+        genai.configure(api_key=api_input)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Procesar PDF
+        reader = pypdf.PdfReader(uploaded_file)
+        text_content = ""
+        for page in reader.pages:
+            text_content += page.extract_text() + "\n"
+        
+        if st.button("🚀 GENERAR EXAMEN"):
+            with st.spinner("Generando reactivos nivel Consejo..."):
+                # Prompt mejorado para evitar errores de formato
+                prompt = f"""Genera un examen de {num_preguntas} preguntas basado en: {text_content[:10000]}. 
+                Dificultad: {dificultad}. Responde ÚNICAMENTE con un JSON válido.
+                Formato: [{{"id": 1, "pregunta": "...", "opciones": ["A", "B", "C", "D"], "correcta": "A"}}]"""
+                
+                response = model.generate_content(prompt)
+                
+                # Limpieza de la respuesta JSON
+                raw_text = response.text.replace('```json', '').replace('```', '').strip()
+                st.session_state.examen = json.loads(raw_text)
+                st.session_state.respuestas = {}
+                st.success("Examen generado con éxito.")
 
+    except Exception as e:
+        st.error(f"Error de configuración: {e}. Verifica tu API Key.")
+
+# Mostrar examen si ya existe en la sesión
 if 'examen' in st.session_state:
     for q in st.session_state.examen:
-        st.write(f"### Pregunta {q['id']}")
-        st.write(q['pregunta'])
-        if q['tipo'].lower() == "opción múltiple":
-            st.session_state.respuestas[q['id']] = st.radio(f"Opción para {q['id']}:", q['opciones'], key=f"q_{q['id']}")
-        else:
-            st.session_state.respuestas[q['id']] = st.text_area("Respuesta técnica:", key=f"q_{q['id']}")
-
-    if st.button("Evaluar Examen"):
+        st.write(f"**{q['id']}. {q['pregunta']}**")
+        st.session_state.respuestas[q['id']] = st.radio(f"Opción para {q['id']}:", q['opciones'], key=f"radio_{q['id']}")
+    
+    if st.button("📊 FINALIZAR Y EVALUAR"):
+        aciertos = 0
         for q in st.session_state.examen:
-            ans = st.session_state.respuestas.get(q['id'])
-            eval_p = f"Pregunta: {q['pregunta']}\nRespuesta: {ans}\nCorrecta: {q['correcta']}\nEvalúa brevemente."
-            feedback = model.generate_content(eval_p)
-            st.info(f"Feedback Q{q['id']}: {feedback.text}")
+            user_ans = st.session_state.respuestas.get(q['id'])
+            if user_ans == q['correcta']:
+                aciertos += 1
+                st.success(f"Pregunta {q['id']}: Correcta")
+            else:
+                st.error(f"Pregunta {q['id']}: Incorrecta. La opción era {q['correcta']}")
+        st.metric("Resultado Final", f"{aciertos}/{len(st.session_state.examen)}")
