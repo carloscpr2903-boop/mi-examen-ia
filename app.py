@@ -2,9 +2,10 @@ import streamlit as st
 import google.generativeai as genai
 import pypdf
 import json
+import requests
 
-# --- CONFIGURACIÓN DE INTERFAZ PREMIUM ---
-st.set_page_config(page_title="HGC - Cirugía Plástica", page_icon="🎓", layout="wide")
+# --- INTERFAZ PREMIUM ---
+st.set_page_config(page_title="HGC - Evaluación Plástica", page_icon="🎓", layout="wide")
 
 st.markdown("""
     <style>
@@ -12,86 +13,90 @@ st.markdown("""
     [data-testid="stSidebar"] { background-color: #1E1E1E !important; }
     [data-testid="stSidebar"] * { color: #FFFFFF !important; }
     .main * { color: #000000 !important; }
-    .stButton>button { background-color: #B87333 !important; color: white !important; width: 100%; border-radius: 8px; }
-    .resumen-card { padding: 20px; border-radius: 10px; border: 1px solid #B87333; background-color: #FFFFFF; }
+    .stButton>button { background-color: #B87333 !important; color: white !important; font-weight: bold; border-radius: 8px; }
+    .card { padding: 15px; border-radius: 10px; border-left: 5px solid #B87333; background-color: #fcfcfc; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- BARRA LATERAL (DATOS DE CONTROL) ---
+# --- CONFIGURACIÓN ---
+URL_SHEET = "URL_DE_TU_GOOGLE_SCRIPT" # <--- PEGA AQUÍ TU URLhttps://script.google.com/macros/s/AKfycbzcPskzds81UQjWfa1BEQpZZgeCB2vwQ-PajzYEpn31ynQ8-obawAnVIn9018uDh5o5/exec 
+
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/1021/1021566.png", width=100)
-    st.header("Control Académico")
-    nombre = st.text_input("Nombre Completo del Residente")
-    grado = st.selectbox("Grado", ["R1", "R2", "R3", "R4 (Jefe)"])
+    st.header("📋 Registro Académico")
+    nombre = st.text_input("Nombre del Residente")
+    grado = st.selectbox("Grado", ["R1", "R2", "R3", "R4"])
     api_key = st.text_input("Gemini API Key", type="password").strip()
-    pdf_file = st.file_uploader("Cargar Literatura (Neligan, Jacono, etc.)", type="pdf")
-    num_preguntas = st.slider("Número de Reactivos", 5, 25, 10)
+    pdf_file = st.file_uploader("Literatura Base (PDF)", type="pdf")
+    
+st.title("🏥 Ramale Exam Center v3.0")
+st.subheader("Evaluación de Alta Especialidad - HGC")
 
-st.title("🏥 Sistema de Evaluación Quirúrgica")
-st.write(f"**Hospital General de Culiacán** | Especialidad en Cirugía Plástica y Reconstructiva")
-
-# --- MOTOR DE INTELIGENCIA ---
+# --- LÓGICA ---
 if pdf_file and api_key and nombre:
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # Extracción de texto
         reader = pypdf.PdfReader(pdf_file)
-        full_text = "\n".join([p.extract_text() for p in reader.pages])
+        full_text = "\n".join([p.extract_text() for p in reader.pages[:20]]) # Limitamos a 20 páginas por velocidad
 
-        if st.button("🚀 GENERAR EXAMEN DE ALTA EXIGENCIA"):
-            with st.spinner("Generando reactivos nivel Consejo..."):
+        if st.button("🚀 INICIAR EVALUACIÓN DE GRADO"):
+            with st.spinner("Diseñando examen por niveles de dificultad..."):
                 prompt = f"""
-                Actúa como un Sinodal Senior del Consejo Mexicano de Cirugía Plástica.
-                Utiliza este texto técnico: {full_text[:15000]}
-                Genera {num_preguntas} preguntas de opción múltiple.
-                REGLAS:
-                1. No uses frases como 'según el texto'. Habla como experto.
-                2. Nivel de dificultad: Muy Alto (Enfocado en anatomía quirúrgica, planos, complicaciones y técnica).
-                3. Formato JSON ESTRICTO: [{{"id":1, "pregunta":"...", "opciones":["...","...","...","..."], "correcta":"A", "justificacion":"..."}}]
+                Eres un sinodal de Cirugía Plástica. Basado en: {full_text[:15000]}
+                Genera 9 preguntas distribuidas así: 3 Sencillas, 3 Moderadas, 3 Difíciles.
+                JSON: [{{"id":1, "nivel":"Sencilla", "pregunta":"...", "opciones":["A","B","C","D"], "correcta":"A", "justificacion":"..."}}]
                 """
                 response = model.generate_content(prompt)
                 data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
-                st.session_state.current_exam = data
-                st.session_state.user_answers = {}
-                st.success("Examen generado. Responda con precisión quirúrgica.")
+                st.session_state.examen = data
+                st.session_state.respuestas = {}
+                st.success("Examen listo.")
 
     except Exception as e:
-        st.error(f"Error de sistema: {e}")
+        st.error(f"Error: {e}")
 
-# --- DESPLIEGUE DEL EXAMEN ---
-if 'current_exam' in st.session_state:
-    for q in st.session_state.current_exam:
-        st.markdown(f"#### {q['id']}. {q['pregunta']}")
-        st.session_state.user_answers[q['id']] = st.radio(
-            f"Seleccione respuesta para P{q['id']}:", 
-            q['opciones'], 
-            key=f"q_{q['id']}", 
-            label_visibility="collapsed"
-        )
+# --- EXAMEN Y EVALUACIÓN ---
+if 'examen' in st.session_state:
+    for q in st.session_state.examen:
+        st.markdown(f"**[{q['nivel']}] {q['id']}. {q['pregunta']}**")
+        st.session_state.respuestas[q['id']] = st.radio("Opción:", q['opciones'], key=f"q_{q['id']}", label_visibility="collapsed")
         st.markdown("---")
 
-    if st.button("📊 FINALIZAR Y ENVIAR A JEFATURA"):
-        score = 0
-        st.header("Dictamen Final")
+    if st.button("📊 FINALIZAR Y ENVIAR A LA DRA. RAFAELA"):
+        resultados = {"Sencilla": 0, "Moderada": 0, "Difícil": 0}
+        errores_log = ""
         
-        for q in st.session_state.current_exam:
-            # Lógica de comparación de letras (A, B, C, D)
-            # Extraemos la letra de la opción seleccionada (asumiendo formato "A) Texto")
-            idx_correcta = ord(q['correcta']) - 65
-            opcion_correcta_texto = q['opciones'][idx_correcta]
-            user_choice = st.session_state.user_answers[q['id']]
-            
-            if user_choice == opcion_correcta_texto:
-                score += 1
-                st.success(f"**P{q['id']}: CORRECTA**")
+        for q in st.session_state.examen:
+            # Corregimos evaluación: comparamos el texto exacto
+            ans_correcta = q['opciones'][ord(q['correcta'])-65]
+            if st.session_state.respuestas[q['id']] == ans_correcta:
+                resultados[q['nivel']] += 1
             else:
-                st.error(f"**P{q['id']}: INCORRECTA**")
-                st.info(f"**Justificación Técnica:** {q['justificacion']}")
+                errores_log += f"P{q['id']} ({q['nivel']}): {q['justificacion']} | "
 
-        final_grade = (score / len(st.session_state.current_exam)) * 10
-        st.metric(f"Calificación de {nombre}", f"{final_grade}/10")
+        total = sum(resultados.values())
+        final_grade = round((total / len(st.session_state.examen)) * 10, 1)
         
-        # NOTA: Aquí es donde conectaremos el envío a la Dra. Rafaela en el siguiente paso.
-        st.warning("Copia esta pantalla o descarga el reporte para entrega a la Jefatura.")
+        # Enviar a Google Sheets
+        payload = {
+            "nombre": nombre,
+            "grado": grado,
+            "calificacion": final_grade,
+            "sencillas": f"{resultados['Sencilla']}/3",
+            "moderadas": f"{resultados['Moderada']}/3",
+            "dificiles": f"{resultados['Difícil']}/3",
+            "detalles_errores": errores_log
+        }
+        
+        try:
+            requests.post(URL_SHEET, json=payload)
+            st.success(f"Resultados enviados con éxito a la Jefatura.")
+        except:
+            st.warning("Error al enviar a la nube, pero aquí están tus resultados.")
+
+        st.header(f"Calificación Final: {final_grade}")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Sencillas", payload["sencillas"])
+        col2.metric("Moderadas", payload["moderadas"])
+        col3.metric("Difíciles", payload["dificiles"])
