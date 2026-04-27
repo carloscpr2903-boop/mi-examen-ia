@@ -536,9 +536,12 @@ if pdf_file and api_key and nombre:
             st.markdown(f"<p style='color:#001F5B; margin-top:12px;'>✅ Examen activo · {respondidas}/{len(st.session_state.examen_data)} respondidas</p>", unsafe_allow_html=True)
         if st.session_state.examen_enviado:
             if st.button("🔄 NUEVO EXAMEN", use_container_width=True):
-                for k in ['examen_data','answers','examen_enviado','detalle_resultados','stats_resultados','nota_final']:
-                    st.session_state[k] = None if k != 'answers' else {}
-                st.session_state['examen_enviado'] = False
+                st.session_state.examen_data = None
+                st.session_state.answers = {}
+                st.session_state.examen_enviado = False
+                st.session_state.detalle_resultados = None
+                st.session_state.stats_resultados = None
+                st.session_state.nota_final = None
                 st.rerun()
 
     if generar:
@@ -560,7 +563,6 @@ if pdf_file and api_key and nombre:
 
             status.info(f"📄 PDF procesado · {len(texto_pdf):,} caracteres")
             progress.progress(35)
-            time.sleep(0.3)
 
             status.info("🤖 Conectando con Gemini...")
             progress.progress(50)
@@ -592,14 +594,9 @@ if pdf_file and api_key and nombre:
                     else:
                         raise Exception(f"No se generó JSON válido: {e}")
 
-            progress.progress(95)
-            status.success("✅ Examen generado exitosamente")
+            progress.progress(100)
             st.session_state.examen_data = preguntas
             st.session_state.answers = {}
-            progress.progress(100)
-            time.sleep(0.4)
-            progress.empty()
-            status.empty()
             st.rerun()
 
         except Exception as e:
@@ -845,9 +842,12 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 if st.button("🔄 GENERAR NUEVO EXAMEN", use_container_width=True):
-                    for k in ['examen_data','answers','examen_enviado','detalle_resultados','stats_resultados','nota_final']:
-                        st.session_state[k] = None if k != 'answers' else {}
-                    st.session_state['examen_enviado'] = False
+                    st.session_state.examen_data = None
+                    st.session_state.answers = {}
+                    st.session_state.examen_enviado = False
+                    st.session_state.detalle_resultados = None
+                    st.session_state.stats_resultados = None
+                    st.session_state.nota_final = None
                     st.rerun()
 
 elif st.session_state.examen_enviado:
@@ -863,7 +863,10 @@ elif st.session_state.examen_enviado:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🔄 NUEVO EXAMEN", use_container_width=True):
-            for k in ['examen_data','answers','examen_enviado','detalle_resultados','stats_resultados','nota_final']:
-                st.session_state[k] = None if k != 'answers' else {}
-            st.session_state['examen_enviado'] = False
+            st.session_state.examen_data = None
+            st.session_state.answers = {}
+            st.session_state.examen_enviado = False
+            st.session_state.detalle_resultados = None
+            st.session_state.stats_resultados = None
+            st.session_state.nota_final = None
             st.rerun()
