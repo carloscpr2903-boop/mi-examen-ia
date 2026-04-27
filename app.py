@@ -545,70 +545,66 @@ if pdf_file and api_key and nombre:
                 st.rerun()
 
     if generar:
-        for k in ['examen_data','answers','examen_enviado','detalle_resultados','stats_resultados','nota_final']:
-            st.session_state[k] = None if k != 'answers' else {}
-        st.session_state['examen_enviado'] = False
+        st.session_state.examen_data      = None
+        st.session_state.answers          = {}
+        st.session_state.examen_enviado   = False
+        st.session_state.detalle_resultados = None
+        st.session_state.stats_resultados = None
+        st.session_state.nota_final       = None
 
-        progress = st.progress(0)
-        status   = st.empty()
+        error_msg = None
+        preguntas = None
 
-        try:
-            status.info("📄 Extrayendo contenido del PDF...")
-            progress.progress(15)
-            texto_pdf = extraer_texto_pdf(pdf_file)
+        with st.status("Generando examen...", expanded=True) as status:
+            try:
+                st.write("📄 Extrayendo contenido del PDF...")
+                texto_pdf = extraer_texto_pdf(pdf_file)
+                if not texto_pdf:
+                    raise Exception("No se pudo extraer texto del PDF.")
+                st.write(f"✅ PDF procesado · {len(texto_pdf):,} caracteres")
 
-            if not texto_pdf:
-                st.error("❌ No se pudo extraer texto del PDF.")
-                st.stop()
+                st.write("🤖 Conectando con Gemini...")
+                model, model_name = inicializar_modelo(api_key)
+                st.session_state.modelo_nombre = model_name
+                st.write(f"✅ Modelo: {model_name.split('/')[-1]}")
 
-            status.info(f"📄 PDF procesado · {len(texto_pdf):,} caracteres")
-            progress.progress(35)
+                st.write(f"🧠 Generando {num_preguntas} preguntas nivel Consejo...")
+                for intento in range(3):
+                    try:
+                        raw    = generar_preguntas(model, texto_pdf, num_preguntas)
+                        limpio = limpiar_json(raw)
+                        preguntas = json.loads(limpio)
+                        if not isinstance(preguntas, list) or len(preguntas) == 0:
+                            raise ValueError("JSON inválido")
+                        for p in preguntas:
+                            for campo in ['id','nivel','pregunta','opciones','correcta','justificacion']:
+                                if campo not in p:
+                                    raise ValueError(f"Falta campo: {campo}")
+                        break
+                    except Exception as e:
+                        if intento < 2:
+                            st.write(f"⚠️ Reintentando... ({intento+2}/3)")
+                            time.sleep(2)
+                        else:
+                            raise Exception(f"No se generó JSON válido: {e}")
 
-            status.info("🤖 Conectando con Gemini...")
-            progress.progress(50)
-            model, model_name = inicializar_modelo(api_key)
-            st.session_state.modelo_nombre = model_name
+                status.update(label="✅ Examen generado", state="complete", expanded=False)
 
-            status.info(f"🧠 Generando {num_preguntas} preguntas nivel Consejo...")
-            progress.progress(65)
+            except Exception as e:
+                status.update(label="❌ Error al generar", state="error", expanded=True)
+                error_msg = str(e)
 
-            preguntas = None
-            for intento in range(3):
-                try:
-                    raw = generar_preguntas(model, texto_pdf, num_preguntas)
-                    limpio = limpiar_json(raw)
-                    preguntas = json.loads(limpio)
-
-                    if not isinstance(preguntas, list) or len(preguntas) == 0:
-                        raise ValueError("JSON inválido")
-
-                    for p in preguntas:
-                        for campo in ['id','nivel','pregunta','opciones','correcta','justificacion']:
-                            if campo not in p:
-                                raise ValueError(f"Falta campo: {campo}")
-                    break
-                except Exception as e:
-                    if intento < 2:
-                        status.warning(f"⚠️ Reintentando... ({intento+2}/3)")
-                        time.sleep(2)
-                    else:
-                        raise Exception(f"No se generó JSON válido: {e}")
-
-            progress.progress(100)
-            st.session_state.examen_data = preguntas
-            st.session_state.answers = {}
-            st.rerun()
-
-        except Exception as e:
-            progress.empty()
-            status.empty()
-            msg = str(e)
-            if "API_KEY" in msg or "invalid" in msg.lower():
+        if error_msg:
+            if "API_KEY" in error_msg or "invalid" in error_msg.lower():
                 st.error("❌ API Key inválida. Verifica en https://aistudio.google.com/apikey")
-            elif "quota" in msg.lower():
-                st.error("❌ Cuota de API agotada. Espera unos minutos.")
+            elif "quota" in error_msg.lower():
+                st.error("❌ Cuota de API agotada. Espera unos minutos o usa otra key.")
             else:
-                st.error(f"❌ Error: {msg}")
+                st.error(f"❌ Error: {error_msg}")
+        elif preguntas:
+            st.session_state.examen_data = preguntas
+            st.session_state.answers     = {}
+            st.rerun()
 
 elif not nombre or not api_key or not pdf_file:
     st.markdown("""
