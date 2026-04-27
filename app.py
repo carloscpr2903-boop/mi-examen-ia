@@ -83,7 +83,8 @@ if pdf_file and api_key and nombre:
 
         if st.button("🚀 GENERAR EVALUACIÓN DE GRADO"):
             with st.spinner("Diseñando reactivos..."):
-                prompt = f"Genera 9 preguntas nivel Consejo basadas en: {texto[:10000]}. 3 Sencillas, 3 Moderadas, 3 Difíciles. Sin frases genéricas. Responde solo JSON: [{{"id":1, "nivel":"Sencilla", "pregunta":"...", "opciones":["A)","B)","C)","D)"], "correcta":"A", "justificacion":"..."}}]"
+                # CORRECCIÓN AQUÍ: Uso de triple comilla para evitar choques con el JSON
+                prompt = f"""Genera 9 preguntas nivel Consejo basadas en: {texto[:10000]}. 3 Sencillas, 3 Moderadas, 3 Difíciles. Sin frases genéricas. Responde solo JSON: [{{"id":1, "nivel":"Sencilla", "pregunta":"...", "opciones":["A)","B)","C)","D)"], "correcta":"A", "justificacion":"..."}}]"""
                 res = model.generate_content(prompt)
                 st.session_state.examen_data = json.loads(res.text.replace('```json', '').replace('```', '').strip())
                 st.session_state.answers = {} # INICIALIZACIÓN CRÍTICA
