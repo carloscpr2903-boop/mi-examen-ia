@@ -17,13 +17,11 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 
 st.set_page_config(page_title="HGC - Cirugía Plástica", page_icon="🏥", layout="wide", initial_sidebar_state="expanded")
 
-# API KEY
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 except:
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
-# ESTILOS
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Source+Sans+3:wght@300;400;600&display=swap');
@@ -48,15 +46,12 @@ div.stButton > button {
 }
 .stRadio label { font-size: 15px !important; color: #111111 !important; }
 .stRadio > div { gap: 8px !important; }
-div[data-testid="stRadio"] label { color: #111111 !important; }
-div[data-testid="stRadio"] label span { color: #111111 !important; }
+div[data-testid="stRadio"] label, div[data-testid="stRadio"] label span,
 div[data-testid="stRadio"] p { color: #111111 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 URL_SHEET = "https://script.google.com/macros/s/AKfycbzcPskzds81UQjWfa1BEQpZZgeCB2vwQ-PajzYEpn31ynQ8-obawAnVIn9018uDh5o5/exec"
-
-# ─── FUNCIONES ───
 
 def extraer_texto_pdf(pdf_file):
     try:
@@ -77,69 +72,66 @@ def limpiar_json(texto):
     match = re.search(r'\[[\s\S]*\]', texto)
     return match.group(0) if match else texto
 
-def generar_preguntas(texto_pdf, num_total):
-    """Genera preguntas clínicas REALES basadas 100% en el PDF"""
-    base = num_total // 3
-    resto = num_total % 3
+def generar_preguntas_batch(textos_capitulos, num_preguntas, batch_num, total_batches):
+    """Genera preguntas en batches para manejar exámenes largos"""
+    base = num_preguntas // 3
+    resto = num_preguntas % 3
     n_sencilla = base + (1 if resto >= 1 else 0)
     n_moderada = base + (1 if resto >= 2 else 0)
     n_dificil = base
 
-    prompt = f"""INSTRUCCIÓN CRÍTICA: Eres un experto evaluador clínico del Consejo Mexicano de Cirugía Plástica, Estética y Reconstructiva. 
+    # Combinar todos los textos de capítulos
+    texto_completo = "\n\n===== NUEVA SECCIÓN =====\n\n".join(textos_capitulos)
 
-CONTENIDO DEL DOCUMENTO A USAR:
-{texto_pdf[:15000]}
+    prompt = f"""INSTRUCCIÓN CRÍTICA: Eres un experto evaluador del Consejo Mexicano de Cirugía Plástica.
 
-GENERA EXACTAMENTE {num_total} PREGUNTAS DE EXAMEN NIVEL CONSEJO.
+CONTENIDO COMPLETO DE LOS CAPÍTULOS (Batch {batch_num}/{total_batches}):
+{texto_completo[:18000]}
 
-REQUISITOS OBLIGATORIOS - LEE CUIDADOSAMENTE:
+GENERA EXACTAMENTE {num_preguntas} PREGUNTAS DE EXAMEN NIVEL CONSEJO.
 
-1. IDIOMA: **ÚNICAMENTE ESPAÑOL** - Sin palabras en inglés. Sin mezcla.
+REQUISITOS OBLIGATORIOS:
 
-2. ESPECIFICIDAD: Cada pregunta debe:
-   - Citar DIRECTAMENTE conceptos, números, estructuras, técnicas del PDF
-   - NO ser genérica (no "¿Qué es la facelift?" sino "¿Cuál es la profundidad exacta del SMAS en brow lift?")
-   - Requerir conocimiento clínico específico del documento
+1. ESPECIFICIDAD TOTAL: Cada pregunta DEBE:
+   - Citar DIRECTAMENTE conceptos, técnicas, números del contenido
+   - NO ser genérica
+   - Requerir conocimiento clínico profundo
 
-3. OPCIONES: 
-   - A, B, C, D deben ser DIFERENTES entre preguntas
-   - Distractores clínicamente plausibles (no obvias)
-   - UNA sola respuesta correcta inequívoca
+2. IDIOMA: **ÚNICAMENTE ESPAÑOL** - Sin inglés
 
-4. JUSTIFICACIÓN:
-   - Citar TEXTUALMENTE la sección relevante del PDF
-   - Explicar POR QUÉ las otras opciones son incorrectas
-   - Mínimo 3 oraciones
+3. OPCIONES: A, B, C, D DIFERENTES entre preguntas, distractores clínicamente plausibles
+
+4. JUSTIFICACIÓN: Cita textual + explicación POR QUÉ es correcta + POR QUÉ las otras son incorrectas
 
 5. DISTRIBUCIÓN:
-   - {n_sencilla} preguntas "Sencilla" (anatomía básica, indicaciones directas del PDF)
-   - {n_moderada} preguntas "Moderada" (decisiones clínicas basadas en el contenido)
-   - {n_dificil} preguntas "Difícil" (casos clínicos complejos, razonamiento quirúrgico)
+   - {n_sencilla} "Sencilla" (anatomía, indicaciones directas)
+   - {n_moderada} "Moderada" (decisiones clínicas, técnica)
+   - {n_dificil} "Difícil" (casos complejos, razonamiento quirúrgico)
 
-RESPONDE ÚNICAMENTE EN JSON VÁLIDO. Sin texto adicional. Sin backticks:
+RESPONDE ÚNICAMENTE EN JSON VÁLIDO. SIN TEXTO ADICIONAL. SIN BACKTICKS:
 
 [
   {{
     "id": 1,
     "nivel": "Sencilla",
-    "pregunta": "¿Cuál es [concepto específico del PDF]?",
-    "opciones": ["A) [opción diferente]", "B) [opción diferente]", "C) [opción diferente]", "D) [opción diferente]"],
+    "pregunta": "¿Cuál es [concepto específico]?",
+    "opciones": ["A) [opción 1]", "B) [opción 2]", "C) [opción 3]", "D) [opción 4]"],
     "correcta": "A",
-    "justificacion": "Según el documento: [cita textual]. [Explicación de por qué es correcta]. [Por qué las otras son incorrectas]."
+    "justificacion": "Según el contenido: [cita]. [Explicación]. [Por qué las otras son incorrectas]."
   }}
 ]"""
 
     client = Groq(api_key=GROQ_API_KEY)
     try:
         response = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model="llama-3.1-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
             max_tokens=6000
         )
         return response.choices[0].message.content
     except Exception as e:
-        raise Exception(f"Error Groq: {str(e)}")
+        raise Exception(f"Error Groq batch {batch_num}: {str(e)}")
 
 def calcular_estadisticas(examen_data, answers):
     stats = {
@@ -180,7 +172,6 @@ def calcular_estadisticas(examen_data, answers):
     return stats, detalle, nota, total_correctas, total_preg
 
 def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
-    """Genera PDF profesional con examen completo"""
     buffer = io.BytesIO()
 
     NAVY = colors.HexColor('#001F5B')
@@ -196,9 +187,7 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
                           topMargin=0.75*inch, bottomMargin=0.75*inch)
 
     historia = []
-    styles = getSampleStyleSheet()
 
-    # ENCABEZADO
     titulo = ParagraphStyle('Titulo', fontName='Helvetica-Bold', fontSize=16, textColor=NAVY, alignment=TA_CENTER, spaceAfter=4)
     subtitulo = ParagraphStyle('Sub', fontName='Helvetica', fontSize=10, textColor=DORADO, alignment=TA_CENTER, spaceAfter=2)
 
@@ -209,7 +198,6 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     historia.append(HRFlowable(width="100%", thickness=2, color=DORADO))
     historia.append(Spacer(1, 8))
 
-    # DATOS
     total_correctas = sum(s["correctas"] for s in stats.values())
     total_preg = sum(s["total"] for s in stats.values())
 
@@ -233,7 +221,6 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     historia.append(tabla_datos)
     historia.append(Spacer(1, 10))
 
-    # RESUMEN
     historia.append(Paragraph("RESUMEN DE DESEMPEÑO POR NIVEL", 
                              ParagraphStyle('Sec', fontName='Helvetica-Bold', fontSize=12, textColor=NAVY, spaceBefore=14, spaceAfter=6)))
     historia.append(HRFlowable(width="100%", thickness=1, color=DORADO))
@@ -260,7 +247,6 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     historia.append(tabla_stats)
     historia.append(PageBreak())
 
-    # PREGUNTAS Y RESPUESTAS
     historia.append(Paragraph("EXAMEN COMPLETO CON SOLUCIONES", 
                              ParagraphStyle('Sec', fontName='Helvetica-Bold', fontSize=14, textColor=NAVY, spaceBefore=14, spaceAfter=6)))
     historia.append(HRFlowable(width="100%", thickness=2, color=DORADO))
@@ -301,7 +287,6 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
         historia.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#DDDDDD')))
         historia.append(Spacer(1, 4))
 
-    # PIE
     historia.append(Spacer(1, 20))
     historia.append(HRFlowable(width="100%", thickness=1, color=DORADO))
     historia.append(Spacer(1, 6))
@@ -314,12 +299,23 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     return buffer
 
 # SESSION STATE
-for key, val in {'examen_data': None, 'answers': {}, 'examen_enviado': False,
-                 'detalle_resultados': None, 'stats_resultados': None, 'nota_final': None}.items():
+for key, val in {
+    'capitulos': {},
+    'bloques': {},
+    'examen_data': None,
+    'answers': {},
+    'examen_enviado': False,
+    'detalle_resultados': None,
+    'stats_resultados': None,
+    'nota_final': None,
+    'bloque_actual': None
+}.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
-# SIDEBAR
+# ─────────────────────────────────────────────
+# SIDEBAR - CARGAR Y ORGANIZAR CAPÍTULOS
+# ─────────────────────────────────────────────
 with st.sidebar:
     logo_url = "https://raw.githubusercontent.com/carloscpr2903-boop/mi-examen-ia/main/Logotipo%20Principal%20Sin%20Fondo%20(1).png"
     try:
@@ -328,32 +324,70 @@ with st.sidebar:
         st.markdown("### 🏥 HGC")
 
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("## REGISTRO")
+    st.markdown("## GESTIÓN DE CAPÍTULOS")
     st.markdown("---")
 
-    nombre = st.text_input("👤 Nombre del Residente", placeholder="Dr./Dra. Apellido Nombre")
-    grado = st.selectbox("🎓 Grado", ["R1", "R2", "R3", "R4 (Jefe)"])
-    pdf_file = st.file_uploader("📄 Cargar PDF Técnico", type="pdf")
+    # CARGAR CAPÍTULOS
+    st.markdown("### 📚 Cargar Capítulos")
+    archivos_cargados = st.file_uploader(
+        "Carga PDFs de capítulos",
+        type="pdf",
+        accept_multiple_files=True,
+        help="Carga todos los capítulos/PDFs que quieras"
+    )
+
+    if archivos_cargados:
+        for pdf in archivos_cargados:
+            nombre_cap = st.text_input(
+                f"Nombre del capítulo: {pdf.name[:30]}",
+                value=pdf.name.replace('.pdf', ''),
+                key=f"nombre_{pdf.name}"
+            )
+            if nombre_cap and pdf.name not in st.session_state.capitulos:
+                texto = extraer_texto_pdf(pdf)
+                if texto:
+                    st.session_state.capitulos[nombre_cap] = texto
+                    st.success(f"✅ {nombre_cap} cargado")
+
+    if st.session_state.capitulos:
+        st.markdown("---")
+        st.markdown("### 📋 Capítulos Cargados")
+        for cap_name in st.session_state.capitulos.keys():
+            st.write(f"✓ {cap_name}")
 
     st.markdown("---")
-    num_preguntas = st.slider("📝 Número de preguntas", min_value=3, max_value=30, value=9, step=3,
-                             help="Múltiplos de 3 para distribución equitativa")
+    st.markdown("### 🎯 Organizar en Bloques")
+    
+    nombre_bloque = st.text_input("Nombre del bloque", placeholder="ej: Bloque 1 - Facelift")
+    
+    if st.session_state.capitulos and nombre_bloque:
+        capitulos_disponibles = list(st.session_state.capitulos.keys())
+        capitulos_seleccionados = st.multiselect(
+            "Selecciona capítulos para este bloque",
+            capitulos_disponibles,
+            key=f"bloque_{nombre_bloque}"
+        )
 
-    st.markdown("---")
-    if nombre and pdf_file:
-        st.markdown("✅ **Sistema listo**")
-    else:
-        faltantes = []
-        if not nombre:
-            faltantes.append("• Nombre")
-        if not pdf_file:
-            faltantes.append("• PDF")
-        st.markdown("⚠️ **Pendiente:**\n" + "\n".join(faltantes))
+        if st.button("➕ Crear Bloque", use_container_width=True):
+            if capitulos_seleccionados:
+                st.session_state.bloques[nombre_bloque] = capitulos_seleccionados
+                st.success(f"✅ Bloque '{nombre_bloque}' creado")
+                st.rerun()
+
+    if st.session_state.bloques:
+        st.markdown("---")
+        st.markdown("### ✅ Bloques Creados")
+        for bloque_name, caps in st.session_state.bloques.items():
+            st.write(f"**{bloque_name}** ({len(caps)} capítulos)")
+            for cap in caps:
+                st.write(f"  └─ {cap}")
 
     if not GROQ_API_KEY:
         st.error("⚙️ API Key no configurada.")
 
+# ─────────────────────────────────────────────
 # ENCABEZADO
+# ─────────────────────────────────────────────
 st.markdown("""
 <div style="text-align:center; padding: 10px 0;">
     <h1 style="font-family:'Playfair Display',serif; color:#001F5B; font-size:26px; margin-bottom:4px;">
@@ -366,86 +400,139 @@ st.markdown("""
 <hr style="border:none; border-top:2px solid #D4AF37; margin:12px 0;">
 """, unsafe_allow_html=True)
 
-# GENERACIÓN
-if pdf_file and nombre and GROQ_API_KEY:
-    col1, col2 = st.columns([2, 3])
+# ─────────────────────────────────────────────
+# ÁREA PRINCIPAL - EXAMEN
+# ─────────────────────────────────────────────
+if st.session_state.bloques:
+    col1, col2, col3 = st.columns([1.5, 2, 1.5])
+    
     with col1:
-        generar = st.button("🚀 GENERAR EVALUACIÓN", use_container_width=True)
+        nombre = st.text_input("👤 Nombre del Residente", placeholder="Dr./Dra. Apellido Nombre")
+    
     with col2:
-        if st.session_state.examen_data and not st.session_state.examen_enviado:
-            respondidas = len([a for a in st.session_state.answers.values() if a])
-            st.markdown(f"<p style='color:#001F5B; margin-top:12px;'>✅ Examen activo · {respondidas}/{len(st.session_state.examen_data)} respondidas</p>", unsafe_allow_html=True)
-        if st.session_state.examen_enviado:
-            if st.button("🔄 NUEVO EXAMEN", use_container_width=True):
-                for k in ['examen_data','answers','examen_enviado','detalle_resultados','stats_resultados','nota_final']:
-                    st.session_state[k] = None if k != 'answers' else {}
-                st.rerun()
+        grado = st.selectbox("🎓 Grado", ["R1", "R2", "R3", "R4 (Jefe)"])
+    
+    with col3:
+        bloque_seleccionado = st.selectbox(
+            "📚 Selecciona Bloque",
+            list(st.session_state.bloques.keys()),
+            key="bloque_selector"
+        )
 
-    if generar:
-        for k in ['examen_data','answers','examen_enviado','detalle_resultados','stats_resultados','nota_final']:
-            st.session_state[k] = None if k != 'answers' else {}
+    st.markdown("---")
+
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        num_preguntas = st.slider(
+            "📝 Número de preguntas",
+            min_value=3, max_value=300, value=9, step=3,
+            help="Hasta 300 preguntas (genera en batches automáticamente)"
+        )
+    
+    with col2:
+        if num_preguntas <= 30:
+            num_batches = 1
+        elif num_preguntas <= 100:
+            num_batches = max(1, num_preguntas // 30)
+        else:
+            num_batches = max(2, num_preguntas // 50)
+        
+        st.metric("Batches", f"{num_batches}")
+    
+    with col3:
+        st.metric("Preguntas", f"{num_preguntas}")
+
+    st.markdown("---")
+
+    generar = st.button("🚀 GENERAR EVALUACIÓN COMPLETA", use_container_width=True)
+
+    if generar and bloque_seleccionado and nombre and GROQ_API_KEY:
+        # Obtener capítulos del bloque seleccionado
+        capitulos_bloque = st.session_state.bloques[bloque_seleccionado]
+        textos_capitulos = [st.session_state.capitulos[cap] for cap in capitulos_bloque]
+
+        # Calcular batches
+        if num_preguntas <= 30:
+            num_batches = 1
+            pregs_por_batch = num_preguntas
+        else:
+            num_batches = max(1, (num_preguntas + 25) // 30)
+            pregs_por_batch = num_preguntas // num_batches
 
         error_msg = None
-        preguntas = None
+        todas_preguntas = []
 
-        with st.status("Generando examen clínico...", expanded=True) as status:
+        with st.status(f"Generando {num_preguntas} preguntas en {num_batches} batches...", expanded=True) as status:
             try:
-                st.write("📄 Extrayendo contenido del PDF...")
-                texto_pdf = extraer_texto_pdf(pdf_file)
-                if not texto_pdf:
-                    raise Exception("No se pudo extraer texto del PDF.")
-                st.write(f"✅ PDF procesado · {len(texto_pdf):,} caracteres")
+                st.write(f"📚 Procesando {len(capitulos_bloque)} capítulos del bloque '{bloque_seleccionado}'...")
+                st.write(f"🧠 Generando en {num_batches} batches de ~{pregs_por_batch} preguntas cada uno...")
+                
+                for batch in range(1, num_batches + 1):
+                    st.write(f"⏳ Batch {batch}/{num_batches}...")
+                    
+                    for intento in range(3):
+                        try:
+                            raw = generar_preguntas_batch(
+                                textos_capitulos,
+                                pregs_por_batch,
+                                batch,
+                                num_batches
+                            )
+                            limpio = limpiar_json(raw)
+                            preguntas_batch = json.loads(limpio)
+                            
+                            if isinstance(preguntas_batch, list) and len(preguntas_batch) > 0:
+                                todas_preguntas.extend(preguntas_batch)
+                                st.write(f"✅ Batch {batch}: {len(preguntas_batch)} preguntas generadas")
+                            else:
+                                raise ValueError("JSON inválido")
+                            break
+                        except Exception as e:
+                            if intento < 2:
+                                st.write(f"⚠️ Reintentando batch {batch}... ({intento+2}/3)")
+                                time.sleep(2)
+                            else:
+                                raise Exception(f"Batch {batch} falló después de 3 intentos: {e}")
+                    
+                    time.sleep(1)  # Evitar rate limit
 
-                st.write(f"🧠 Generando {num_preguntas} preguntas clínicas basadas en el documento...")
-                for intento in range(3):
-                    try:
-                        raw = generar_preguntas(texto_pdf, num_preguntas)
-                        limpio = limpiar_json(raw)
-                        preguntas = json.loads(limpio)
-                        
-                        if not isinstance(preguntas, list) or len(preguntas) == 0:
-                            raise ValueError("JSON inválido")
-                        
-                        for p in preguntas:
-                            for campo in ['id','nivel','pregunta','opciones','correcta','justificacion']:
-                                if campo not in p:
-                                    raise ValueError(f"Falta campo: {campo}")
-                        break
-                    except Exception as e:
-                        if intento < 2:
-                            st.write(f"⚠️ Reintentando... ({intento+2}/3)")
-                            time.sleep(2)
-                        else:
-                            raise Exception(f"Error JSON: {e}")
+                # Renumerar preguntas
+                for i, p in enumerate(todas_preguntas, 1):
+                    p['id'] = i
 
-                status.update(label="✅ Examen generado", state="complete", expanded=False)
+                status.update(label=f"✅ {len(todas_preguntas)} preguntas generadas", state="complete")
 
             except Exception as e:
-                status.update(label="❌ Error al generar", state="error", expanded=True)
+                status.update(label="❌ Error al generar", state="error")
                 error_msg = str(e)
 
         if error_msg:
             st.error(f"❌ {error_msg}")
-        elif preguntas:
-            st.session_state.examen_data = preguntas
+        elif todas_preguntas:
+            st.session_state.examen_data = todas_preguntas
             st.session_state.answers = {}
             st.rerun()
 
-elif not GROQ_API_KEY:
-    st.error("⚙️ La API Key no está configurada. Contacta al administrador.")
-elif not nombre or not pdf_file:
+elif st.session_state.capitulos:
+    st.info("📋 Crea un bloque desde el panel izquierdo para comenzar")
+else:
     st.markdown("""
     <div style="text-align:center; padding:60px 20px;">
         <div style="font-size:48px;">🏥</div>
         <p style="font-size:16px; color:#666; margin-top:16px;">
             <strong>Sistema de Evaluación HGC</strong><br><br>
-            Completa: <strong>Nombre · PDF · Número de preguntas</strong>
+            Carga capítulos en el panel izquierdo, organízalos en bloques,<br>
+            y genera exámenes de cualquier extensión.
         </p>
     </div>
     """, unsafe_allow_html=True)
 
+# ─────────────────────────────────────────────
 # EXAMEN
+# ─────────────────────────────────────────────
 if st.session_state.examen_data and not st.session_state.examen_enviado:
+
     examen_data = st.session_state.examen_data
     total_preg = len(examen_data)
     respondidas = len([a for a in st.session_state.answers.values() if a])
@@ -544,7 +631,6 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
                 with col:
                     st.metric(f"Nivel {nivel}", f"{s['correctas']}/{s['total']}", f"{pct}%")
 
-            # GOOGLE SHEETS
             st.markdown("---")
             errores_resumen = [
                 f"P{r['id']} ({r['nivel']}): {r['pregunta'][:60]}..."
@@ -570,7 +656,6 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
                 except:
                     st.warning("⚠️ No se pudo enviar, pero el PDF se generó.")
 
-            # PDF - ESTO SIEMPRE SE GENERA
             st.markdown("---")
             st.markdown("### 📄 Descargar Examen Completo con Soluciones")
             fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -584,21 +669,21 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
                     st.download_button(
                         label="⬇️ DESCARGAR PDF EXAMEN + SOLUCIONES",
                         data=pdf_buffer,
-                        file_name=f"HGC_{nombre.replace(' ','_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                        file_name=f"HGC_{nombre.replace(' ','_')}_{total_count}preg_{datetime.now().strftime('%Y%m%d')}.pdf",
                         mime="application/pdf",
                         use_container_width=True
                     )
-                    st.success("✅ PDF generado: examen completo + respuestas + justificaciones")
+                    st.success(f"✅ PDF generado: {total_count} preguntas + soluciones")
                 except Exception as e:
                     st.error(f"❌ Error PDF: {e}")
 
-            # NUEVO EXAMEN
             st.markdown("<br>", unsafe_allow_html=True)
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 if st.button("🔄 GENERAR NUEVO EXAMEN", use_container_width=True):
-                    for k in ['examen_data','answers','examen_enviado','detalle_resultados','stats_resultados','nota_final']:
-                        st.session_state[k] = None if k != 'answers' else {}
+                    st.session_state.examen_data = None
+                    st.session_state.answers = {}
+                    st.session_state.examen_enviado = False
                     st.rerun()
 
 elif st.session_state.examen_enviado:
@@ -606,14 +691,7 @@ elif st.session_state.examen_enviado:
     <div style="text-align:center; padding:60px 20px;">
         <div style="font-size:48px;">✅</div>
         <p style="font-size:16px; color:#333; margin-top:16px;">
-            <strong>Examen completado y enviado a Jefatura.</strong><br>
-            Usa el botón "NUEVO EXAMEN" para continuar.
+            <strong>Examen completado y enviado a Jefatura.</strong>
         </p>
     </div>
     """, unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("🔄 NUEVO EXAMEN", use_container_width=True):
-            for k in ['examen_data','answers','examen_enviado','detalle_resultados','stats_resultados','nota_final']:
-                st.session_state[k] = None if k != 'answers' else {}
-            st.rerun()
