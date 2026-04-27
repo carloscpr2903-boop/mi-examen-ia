@@ -29,7 +29,6 @@ with st.sidebar:
     grado_residente = st.selectbox("Grado Académico", ["R1", "R2", "R3", "R4 (Jefe)"])
     api_key = st.text_input("Gemini API Key", type="password").strip()
     pdf_file = st.file_uploader("Subir Literatura Técnica (PDF)", type="pdf")
-    num_preguntas = 9 # Fijado en 9 para asegurar 3 de cada nivel
 
 st.title("🏥 Ramale Exam Center v3.0")
 st.write(f"**Hospital General de Culiacán** | Jefatura de Residentes")
@@ -38,24 +37,24 @@ st.write(f"**Hospital General de Culiacán** | Jefatura de Residentes")
 if pdf_file and api_key and nombre_residente:
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # Leer PDF
+        # --- BUSCADOR DINÁMICO DE MODELO (SOLUCIÓN AL 404) ---
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        model_name = next((m for m in available_models if "flash" in m), available_models[0])
+        model = genai.GenerativeModel(model_name)
+        
         reader = pypdf.PdfReader(pdf_file)
-        # Extraemos texto de las primeras páginas para contexto quirúrgico
         texto_base = "\n".join([page.extract_text() for page in reader.pages[:15]])
 
         if st.button("🚀 INICIAR EXAMEN DE GRADO"):
-            with st.spinner("Diseñando evaluación nivel Consejo..."):
+            with st.spinner(f"Usando motor {model_name} para nivel Consejo..."):
                 prompt = f"""
-                Eres un Sinodal de Cirugía Plástica evaluando a un residente. 
+                Actúa como un Sinodal de Cirugía Plástica experto. 
                 Basado en este contenido: {texto_base[:12000]}
                 Genera EXACTAMENTE 9 preguntas de opción múltiple.
                 - 3 Sencillas (Anatomía/Conceptos básicos)
                 - 3 Moderadas (Técnica/Planificación)
                 - 3 Difíciles (Complicaciones/Casos complejos)
-                
-                No uses frases genéricas como 'según el texto'. Habla como cirujano experto.
                 Responde ÚNICAMENTE con este formato JSON:
                 [
                   {{
@@ -72,7 +71,7 @@ if pdf_file and api_key and nombre_residente:
                 raw_json = response.text.replace('```json', '').replace('```', '').strip()
                 st.session_state.examen_data = json.loads(raw_json)
                 st.session_state.user_answers = {}
-                st.success("Examen generado correctamente. Proceda con la evaluación.")
+                st.success("Examen generado correctamente.")
 
     except Exception as e:
         st.error(f"Error en el sistema: {e}")
@@ -88,29 +87,21 @@ if 'examen_data' in st.session_state:
         st.markdown("<br>", unsafe_allow_html=True)
 
     if st.button("📊 FINALIZAR Y NOTIFICAR A JEFATURA"):
-        # Contadores de desempeño
         stats = {"Sencilla": 0, "Moderada": 0, "Difícil": 0}
         log_errores = []
 
         for item in st.session_state.examen_data:
-            # Extraer la letra de la respuesta correcta e índice
-            letra_correcta = item['correcta'] # Ejemplo: "A"
-            idx = ord(letra_correcta) - 65
+            idx = ord(item['correcta']) - 65
             texto_correcto = item['opciones'][idx]
-            
-            respuesta_usuario = st.session_state.user_answers[item['id']]
-            
-            if respuesta_usuario == texto_correcto:
+            if st.session_state.user_answers[item['id']] == texto_correcto:
                 stats[item['nivel']] += 1
             else:
                 log_errores.append(f"P{item['id']} ({item['nivel']}): {item['justificacion']}")
 
-        # Cálculo de nota
         total_aciertos = sum(stats.values())
         nota_final = round((total_aciertos / 9) * 10, 1)
         detalles_texto = " | ".join(log_errores) if log_errores else "Sin errores."
 
-        # Preparar envío a Google Sheets para la Dra. Rafaela
         payload = {
             "nombre": nombre_residente,
             "grado": grado_residente,
@@ -122,22 +113,18 @@ if 'examen_data' in st.session_state:
         }
 
         try:
-            r = requests.post(URL_SHEET, json=payload)
-            if r.status_code == 200:
-                st.success(f"✅ Evaluación finalizada. Reporte enviado a la Dra. Rafaela.")
-            else:
-                st.warning("⚠️ Examen evaluado, pero hubo un error de conexión con la base de datos.")
+            requests.post(URL_SHEET, json=payload)
+            st.success(f"✅ Reporte enviado a la Dra. Rafaela.")
         except:
-            st.error("❌ Error crítico al conectar con el servidor de resultados.")
+            st.warning("⚠️ Error de envío a la nube.")
 
-        # Mostrar resultados en pantalla para el residente
-        st.header(f"Resultado Final: {nota_final}/10")
+        st.header(f"Calificación Final: {nota_final}/10")
         c1, c2, c3 = st.columns(3)
         c1.metric("Sencillas", payload["sencillas"])
         c2.metric("Moderadas", payload["moderadas"])
         c3.metric("Difíciles", payload["dificiles"])
         
         if log_errores:
-            st.subheader("Retroalimentación para estudio:")
+            st.subheader("Retroalimentación Técnica:")
             for err in log_errores:
                 st.info(err)
