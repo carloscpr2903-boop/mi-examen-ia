@@ -28,7 +28,7 @@ with st.sidebar:
 if uploaded_file and api_input:
     try:
         genai.configure(api_key=api_input)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
         
         # Procesar PDF
         reader = pypdf.PdfReader(uploaded_file)
