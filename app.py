@@ -80,12 +80,30 @@ def limpiar_json(texto):
     texto = re.sub(r'```json\s*', '', texto)
     texto = re.sub(r'```\s*', '', texto)
     
-    # Encontrar primer { y último }
-    inicio = texto.find('{')
-    final = texto.rfind('}')
+    # Intentar encontrar JSON array [...]
+    inicio_array = texto.find('[')
+    if inicio_array >= 0:
+        # Encontrar el último ] que cierre el array
+        contador = 0
+        for i in range(inicio_array, len(texto)):
+            if texto[i] == '[':
+                contador += 1
+            elif texto[i] == ']':
+                contador -= 1
+                if contador == 0:
+                    return texto[inicio_array:i+1].strip()
     
-    if inicio >= 0 and final > inicio:
-        texto = texto[inicio:final+1]
+    # Si no hay array, buscar objeto {...}
+    inicio = texto.find('{')
+    if inicio >= 0:
+        contador = 0
+        for i in range(inicio, len(texto)):
+            if texto[i] == '{':
+                contador += 1
+            elif texto[i] == '}':
+                contador -= 1
+                if contador == 0:
+                    return texto[inicio:i+1].strip()
     
     return texto.strip()
 
