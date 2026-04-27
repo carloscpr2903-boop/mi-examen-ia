@@ -3,60 +3,80 @@ import google.generativeai as genai
 import pypdf
 import json
 
+# 1. CONFIGURACIÓN VISUAL (ESTILO RAMALE)
 st.set_page_config(page_title="Ramale Exam Center", page_icon="🏥")
-st.markdown("<style>.stApp {background-color: #FAF9F6;} .stButton>button {background-color: #B87333; color: white;}</style>", unsafe_allow_html=True)
+st.markdown("""
+    <style>
+    .stApp {background-color: #FAF9F6;}
+    .stButton>button {background-color: #B87333; color: white; font-weight: bold;}
+    /* Forzar color negro en todo el texto del examen */
+    p, span, label {color: #000000 !important; font-size: 18px !important;}
+    h1, h2, h3 {color: #5D4037 !important;}
+    </style>
+    """, unsafe_allow_html=True)
 
 st.title("🏥 Ramale Exam Center")
 st.subheader("Simulador Quirúrgico Personalizado")
 
+# 2. PANEL LATERAL
 with st.sidebar:
     st.header("Ajustes")
     api_key = st.text_input("Gemini API Key", type="password").strip()
-    uploaded_file = st.file_uploader("Subir PDF Quirúrgico", type="pdf")
+    uploaded_file = st.file_uploader("Subir PDF de Neligan / Otros", type="pdf")
     dificultad = st.selectbox("Nivel", ["Residente", "Jefe de Residentes", "Consejo-level"])
 
+# 3. LÓGICA DE GENERACIÓN
 if uploaded_file and api_key:
     try:
         genai.configure(api_key=api_key)
-        
-        # BUSCADOR DINÁMICO DE MODELOS (Para evitar el Error 404)
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # Priorizamos flash, si no, el que esté disponible
-        model_to_use = next((m for m in available_models if "flash" in m), available_models[0])
-        
-        model = genai.GenerativeModel(model_to_use)
+        # Buscador automático de modelo disponible
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        selected_model = next((m for m in models if "flash" in m), models[0])
+        model = genai.GenerativeModel(selected_model)
         
         reader = pypdf.PdfReader(uploaded_file)
-        texto = ""
+        texto_pdf = ""
         for page in reader.pages:
-            texto += page.extract_text() + "\n"
+            texto_pdf += page.extract_text() + "\n"
 
         if st.button("🚀 GENERAR EXAMEN"):
-            with st.spinner(f"Usando motor {model_to_use}..."):
-                prompt = f"Genera 5 preguntas nivel {dificultad} basadas en: {texto[:10000]}. Responde solo JSON: [{{'id':1, 'pregunta':'...', 'opciones':['A','B','C','D'], 'correcta':'A'}}]"
+            with st.spinner("Analizando técnica quirúrgica..."):
+                prompt = f"Genera 5 preguntas nivel {dificultad} basadas en: {texto_pdf[:10000]}. Responde UNICAMENTE JSON: [{{'id':1, 'pregunta':'...', 'opciones':['A','B','C','D'], 'correcta':'A'}}]"
                 response = model.generate_content(prompt)
-                
-                # Limpiar la respuesta de la IA
+                # Limpiar y guardar en sesión
                 clean_json = response.text.replace('```json', '').replace('```', '').strip()
                 st.session_state.examen = json.loads(clean_json)
                 st.session_state.respuestas = {}
-                st.success("¡Examen listo!")
+                st.success("¡Examen listo! Responde abajo.")
                 
     except Exception as e:
-        st.error(f"Error detectado: {e}")
-        st.info("Tip: Asegúrate de que tu API Key sea de 'Google AI Studio'.")
+        st.error(f"Error: {e}")
 
+# 4. INTERFAZ DEL EXAMEN (VISIBILIDAD MEJORADA)
 if 'examen' in st.session_state:
+    st.markdown("---")
     for q in st.session_state.examen:
-        st.write(f"**{q['id']}. {q['pregunta']}**")
-        st.session_state.respuestas[q['id']] = st.radio(f"Elije para P{q['id']}:", q['opciones'], key=f"r_{q['id']}")
+        # Pregunta en negrita y negro
+        st.markdown(f"**{q['id']}. {q['pregunta']}**")
+        
+        # Opciones
+        st.session_state.respuestas[q['id']] = st.radio(
+            f"Selecciona tu respuesta para la P{q['id']}:", 
+            q['opciones'], 
+            key=f"r_{q['id']}"
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
     
-    if st.button("📊 RESULTADOS"):
+    if st.button("📊 VER RESULTADOS"):
         aciertos = 0
         for q in st.session_state.examen:
-            if st.session_state.respuestas.get(q['id']) == q['correcta']:
+            user_ans = st.session_state.respuestas.get(q['id'])
+            if user_ans == q['correcta']:
                 aciertos += 1
-                st.success(f"P{q['id']}: Correcta ✅")
+                st.success(f"Pregunta {q['id']}: Correcta ✅")
             else:
-                st.error(f"P{q['id']}: Incorrecta (Era {q['correcta']}) ❌")
+                st.error(f"Pregunta {q['id']}: Incorrecta. Era: {q['correcta']} ❌")
+        
         st.metric("Puntuación", f"{aciertos}/{len(st.session_state.examen)}")
+        if aciertos == len(st.session_state.examen):
+            st.balloons()
