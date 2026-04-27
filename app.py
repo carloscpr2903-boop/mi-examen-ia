@@ -80,6 +80,10 @@ div.stButton > button {
 
 .stRadio label { font-size: 15px !important; color: #111111 !important; }
 .stRadio > div { gap: 8px !important; }
+.stRadio label p { color: #111111 !important; font-size: 15px !important; }
+div[data-testid="stRadio"] label { color: #111111 !important; }
+div[data-testid="stRadio"] label span { color: #111111 !important; }
+div[data-testid="stRadio"] p { color: #111111 !important; }
 
 [data-testid="metric-container"] {
     background: white;
