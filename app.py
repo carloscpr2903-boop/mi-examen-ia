@@ -6,6 +6,11 @@ import time
 import re
 import io
 import os
+import smtplib
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 from datetime import datetime
 from groq import Groq
 from reportlab.lib.pagesizes import letter
@@ -19,8 +24,12 @@ st.set_page_config(page_title="HGC - Cirugía Plástica", page_icon="🏥", layo
 
 try:
     GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+    GMAIL_USER = st.secrets.get("GMAIL_USER", "")
+    GMAIL_PASSWORD = st.secrets.get("GMAIL_PASSWORD", "")
 except:
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+    GMAIL_USER = os.environ.get("GMAIL_USER", "")
+    GMAIL_PASSWORD = os.environ.get("GMAIL_PASSWORD", "")
 
 st.markdown("""
 <style>
@@ -53,6 +62,43 @@ div[data-testid="stRadio"] p { color: #111111 !important; }
 
 URL_SHEET = "https://script.google.com/macros/s/AKfycbzcPskzds81UQjWfa1BEQpZZgeCB2vwQ-PajzYEpn31ynQ8-obawAnVIn9018uDh5o5/exec"
 
+def enviar_email_pdf(destinatario, nombre_residente, grado, nota, pdf_buffer):
+    """Envía el PDF por email a la Dra"""
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = GMAIL_USER
+        msg['To'] = destinatario
+        msg['Subject'] = f"Examen HGC - {nombre_residente} ({grado}) - Calificación: {nota}/10"
+
+        body = f"""Examen generado automáticamente por el Sistema de Evaluación HGC
+
+Residente: {nombre_residente}
+Grado: {grado}
+Calificación: {nota}/10
+Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}
+
+El PDF adjunto contiene el examen completo con soluciones y justificaciones.
+
+---
+HGC - Hospital General de Culiacán
+División de Cirugía Plástica, Estética y Reconstructiva
+"""
+
+        msg.attach(MIMEText(body, 'plain'))
+
+        attachment = MIMEApplication(pdf_buffer.read(), _subtype="pdf")
+        attachment.add_header('Content-Disposition', 'attachment',
+                             filename=f"HGC_{nombre_residente.replace(' ','_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf")
+        msg.attach(attachment)
+
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(GMAIL_USER, GMAIL_PASSWORD)
+            server.send_message(msg)
+
+        return True, "PDF enviado correctamente"
+    except Exception as e:
+        return False, str(e)
+
 def extraer_texto_pdf(pdf_file):
     try:
         reader = pypdf.PdfReader(pdf_file)
@@ -72,74 +118,50 @@ def limpiar_json(texto):
     match = re.search(r'\[[\s\S]*\]', texto)
     return match.group(0) if match else texto
 
-def obtener_modelo_disponible(api_key):
-    """Detecta dinámicamente qué modelo está disponible en Groq"""
-    client = Groq(api_key=api_key)
-    
-    # Modelos preferidos en orden
-    modelos_preferidos = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-70b-versatile",
-        "llama-3.2-90b-vision-preview",
-        "mixtral-8x7b-32768",
-        "gemma-2-9b-it",
-    ]
-    
-    try:
-        # Obtener lista de modelos disponibles
-        modelos = client.models.list()
-        modelos_disponibles = [m.id for m in modelos]
-        
-        # Buscar el primer modelo preferido que esté disponible
-        for modelo in modelos_preferidos:
-            if modelo in modelos_disponibles:
-                return modelo
-        
-        # Si no hay preferido, usar el primero disponible
-        if modelos_disponibles:
-            return modelos_disponibles[0]
-        
-        # Fallback
-        return "llama-3.3-70b-versatile"
-    except:
-        # Si falla la detección, usar un modelo estable
-        return "llama-3.3-70b-versatile"
-
-def generar_preguntas_batch(textos_capitulos, num_preguntas, batch_num, total_batches, modelo):
-    """Genera preguntas en batches para manejar exámenes largos"""
+def generar_preguntas_batch(textos_capitulos, num_preguntas, batch_num, total_batches):
+    """Genera preguntas 100% en español, SIN inglés"""
     base = num_preguntas // 3
     resto = num_preguntas % 3
     n_sencilla = base + (1 if resto >= 1 else 0)
     n_moderada = base + (1 if resto >= 2 else 0)
     n_dificil = base
 
-    # Combinar todos los textos de capítulos
     texto_completo = "\n\n===== NUEVA SECCIÓN =====\n\n".join(textos_capitulos)
 
-    prompt = f"""INSTRUCCIÓN CRÍTICA: Eres un experto evaluador del Consejo Mexicano de Cirugía Plástica.
+    prompt = f"""INSTRUCCIÓN CRÍTICA ABSOLUTA: Eres un experto evaluador del Consejo Mexicano de Cirugía Plástica.
 
-CONTENIDO COMPLETO DE LOS CAPÍTULOS (Batch {batch_num}/{total_batches}):
+CONTENIDO DE LOS CAPÍTULOS (Batch {batch_num}/{total_batches}):
 {texto_completo[:18000]}
 
 GENERA EXACTAMENTE {num_preguntas} PREGUNTAS DE EXAMEN NIVEL CONSEJO.
 
-REQUISITOS OBLIGATORIOS:
+REQUISITOS ABSOLUTAMENTE OBLIGATORIOS - CUMPLE TODOS O FALLA:
 
-1. ESPECIFICIDAD TOTAL: Cada pregunta DEBE:
-   - Citar DIRECTAMENTE conceptos, técnicas, números del contenido
-   - NO ser genérica
-   - Requerir conocimiento clínico profundo
+1. **IDIOMA ABSOLUTO**: ÚNICAMENTE ESPAÑOL. SIN PALABRAS EN INGLÉS. NI UNA PALABRA EN INGLÉS.
+   - Si el contenido tiene términos en inglés, TRADÚCELOS al español
+   - Ejemplo: "TRAM" → "Colgajo de músculo recto abdominal"
+   - Ejemplo: "SMAS" → "Sistema muscular superficial"
 
-2. IDIOMA: **ÚNICAMENTE ESPAÑOL** - Sin inglés
+2. **JUSTIFICACIONES EN ESPAÑOL PURO**:
+   - TRADUCE TODAS las citas al español
+   - PARAFRASEA todo en español claro
+   - NO copies texto en inglés
+   - Cada justificación MÍNIMO 4 oraciones en español
 
-3. OPCIONES: A, B, C, D DIFERENTES entre preguntas, distractores clínicamente plausibles
+3. **ESPECIFICIDAD CLÍNICA**:
+   - Cita conceptos específicos del contenido
+   - NO preguntas genéricas
+   - Opciones clínicamente diferentes
 
-4. JUSTIFICACIÓN: Cita textual + explicación POR QUÉ es correcta + POR QUÉ las otras son incorrectas
+4. **OPCIONES**:
+   - A, B, C, D DIFERENTES entre preguntas
+   - Distractores clínicamente plausibles
+   - UNA SOLA respuesta correcta
 
-5. DISTRIBUCIÓN:
-   - {n_sencilla} "Sencilla" (anatomía, indicaciones directas)
-   - {n_moderada} "Moderada" (decisiones clínicas, técnica)
-   - {n_dificil} "Difícil" (casos complejos, razonamiento quirúrgico)
+5. **DISTRIBUCIÓN**:
+   - {n_sencilla} "Sencilla" (anatomía, indicaciones)
+   - {n_moderada} "Moderada" (decisiones clínicas)
+   - {n_dificil} "Difícil" (casos complejos)
 
 RESPONDE ÚNICAMENTE EN JSON VÁLIDO. SIN TEXTO ADICIONAL. SIN BACKTICKS:
 
@@ -147,17 +169,17 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO. SIN TEXTO ADICIONAL. SIN BACKTICKS:
   {{
     "id": 1,
     "nivel": "Sencilla",
-    "pregunta": "¿Cuál es [concepto específico]?",
-    "opciones": ["A) [opción 1]", "B) [opción 2]", "C) [opción 3]", "D) [opción 4]"],
+    "pregunta": "¿Cuál es [concepto en ESPAÑOL]?",
+    "opciones": ["A) [opción en ESPAÑOL]", "B) [opción en ESPAÑOL]", "C) [opción en ESPAÑOL]", "D) [opción en ESPAÑOL]"],
     "correcta": "A",
-    "justificacion": "Según el contenido: [cita]. [Explicación]. [Por qué las otras son incorrectas]."
+    "justificacion": "COMPLETAMENTE EN ESPAÑOL: [Explicación en español]. [Cita del contenido traducida al español]. [Por qué las otras son incorrectas]."
   }}
 ]"""
 
     client = Groq(api_key=GROQ_API_KEY)
     try:
         response = client.chat.completions.create(
-            model=modelo,
+            model="llama-3.1-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
             max_tokens=6000
@@ -346,9 +368,7 @@ for key, val in {
     if key not in st.session_state:
         st.session_state[key] = val
 
-# ─────────────────────────────────────────────
-# SIDEBAR - CARGAR Y ORGANIZAR CAPÍTULOS
-# ─────────────────────────────────────────────
+# SIDEBAR
 with st.sidebar:
     logo_url = "https://raw.githubusercontent.com/carloscpr2903-boop/mi-examen-ia/main/Logotipo%20Principal%20Sin%20Fondo%20(1).png"
     try:
@@ -360,7 +380,6 @@ with st.sidebar:
     st.markdown("## GESTIÓN DE CAPÍTULOS")
     st.markdown("---")
 
-    # CARGAR CAPÍTULOS
     st.markdown("### 📚 Cargar Capítulos")
     archivos_cargados = st.file_uploader(
         "Carga PDFs de capítulos",
@@ -412,15 +431,11 @@ with st.sidebar:
         st.markdown("### ✅ Bloques Creados")
         for bloque_name, caps in st.session_state.bloques.items():
             st.write(f"**{bloque_name}** ({len(caps)} capítulos)")
-            for cap in caps:
-                st.write(f"  └─ {cap}")
 
     if not GROQ_API_KEY:
         st.error("⚙️ API Key no configurada.")
 
-# ─────────────────────────────────────────────
 # ENCABEZADO
-# ─────────────────────────────────────────────
 st.markdown("""
 <div style="text-align:center; padding: 10px 0;">
     <h1 style="font-family:'Playfair Display',serif; color:#001F5B; font-size:26px; margin-bottom:4px;">
@@ -433,9 +448,7 @@ st.markdown("""
 <hr style="border:none; border-top:2px solid #D4AF37; margin:12px 0;">
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# ÁREA PRINCIPAL - EXAMEN
-# ─────────────────────────────────────────────
+# ÁREA PRINCIPAL
 if st.session_state.bloques:
     col1, col2, col3 = st.columns([1.5, 2, 1.5])
     
@@ -460,7 +473,7 @@ if st.session_state.bloques:
         num_preguntas = st.slider(
             "📝 Número de preguntas",
             min_value=3, max_value=300, value=9, step=3,
-            help="Hasta 300 preguntas (genera en batches automáticamente)"
+            help="Hasta 300 preguntas"
         )
     
     with col2:
@@ -481,11 +494,9 @@ if st.session_state.bloques:
     generar = st.button("🚀 GENERAR EVALUACIÓN COMPLETA", use_container_width=True)
 
     if generar and bloque_seleccionado and nombre and GROQ_API_KEY:
-        # Obtener capítulos del bloque seleccionado
         capitulos_bloque = st.session_state.bloques[bloque_seleccionado]
         textos_capitulos = [st.session_state.capitulos[cap] for cap in capitulos_bloque]
 
-        # Calcular batches
         if num_preguntas <= 30:
             num_batches = 1
             pregs_por_batch = num_preguntas
@@ -498,10 +509,6 @@ if st.session_state.bloques:
 
         with st.status(f"Generando {num_preguntas} preguntas en {num_batches} batches...", expanded=True) as status:
             try:
-                st.write(f"🔍 Detectando modelo disponible en Groq...")
-                modelo = obtener_modelo_disponible(GROQ_API_KEY)
-                st.write(f"✅ Usando modelo: {modelo}")
-                
                 st.write(f"📚 Procesando {len(capitulos_bloque)} capítulos del bloque '{bloque_seleccionado}'...")
                 st.write(f"🧠 Generando en {num_batches} batches de ~{pregs_por_batch} preguntas cada uno...")
                 
@@ -514,15 +521,14 @@ if st.session_state.bloques:
                                 textos_capitulos,
                                 pregs_por_batch,
                                 batch,
-                                num_batches,
-                                modelo
+                                num_batches
                             )
                             limpio = limpiar_json(raw)
                             preguntas_batch = json.loads(limpio)
                             
                             if isinstance(preguntas_batch, list) and len(preguntas_batch) > 0:
                                 todas_preguntas.extend(preguntas_batch)
-                                st.write(f"✅ Batch {batch}: {len(preguntas_batch)} preguntas generadas")
+                                st.write(f"✅ Batch {batch}: {len(preguntas_batch)} preguntas")
                             else:
                                 raise ValueError("JSON inválido")
                             break
@@ -531,11 +537,10 @@ if st.session_state.bloques:
                                 st.write(f"⚠️ Reintentando batch {batch}... ({intento+2}/3)")
                                 time.sleep(2)
                             else:
-                                raise Exception(f"Batch {batch} falló después de 3 intentos: {e}")
+                                raise Exception(f"Batch {batch} falló: {e}")
                     
-                    time.sleep(1)  # Evitar rate limit
+                    time.sleep(1)
 
-                # Renumerar preguntas
                 for i, p in enumerate(todas_preguntas, 1):
                     p['id'] = i
 
@@ -566,9 +571,7 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
 # EXAMEN
-# ─────────────────────────────────────────────
 if st.session_state.examen_data and not st.session_state.examen_enviado:
 
     examen_data = st.session_state.examen_data
@@ -692,28 +695,29 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
                     requests.post(URL_SHEET, json=payload, timeout=15)
                     st.success("✅ Resultados enviados a Jefatura.")
                 except:
-                    st.warning("⚠️ No se pudo enviar, pero el PDF se generó.")
+                    st.warning("⚠️ No se pudo enviar resultados a Google Sheets.")
 
+            # GENERAR Y ENVIAR PDF
             st.markdown("---")
-            st.markdown("### 📄 Descargar Examen Completo con Soluciones")
-            fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
             
-            with st.spinner("📄 Generando PDF con todo el examen y soluciones..."):
+            with st.spinner("📄 Generando PDF y enviando a jefatura..."):
                 try:
+                    fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
                     pdf_buffer = generar_pdf_examen(
                         nombre, grado, examen_data,
                         detalle, stats, nota, fecha_str
                     )
-                    st.download_button(
-                        label="⬇️ DESCARGAR PDF EXAMEN + SOLUCIONES",
-                        data=pdf_buffer,
-                        file_name=f"HGC_{nombre.replace(' ','_')}_{total_count}preg_{datetime.now().strftime('%Y%m%d')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-                    st.success(f"✅ PDF generado: {total_count} preguntas + soluciones")
+
+                    # Enviar email
+                    exito, msg = enviar_email_pdf(GMAIL_USER, nombre, grado, nota, pdf_buffer)
+                    
+                    if exito:
+                        st.success(f"✅ **PDF enviado exitosamente a jefatura**\n\n📧 Email: {GMAIL_USER}\n\n✓ El residente verá este mensaje de confirmación.\n✓ El PDF con el examen completo está en el email de jefatura.")
+                    else:
+                        st.warning(f"⚠️ Error al enviar PDF: {msg}")
+
                 except Exception as e:
-                    st.error(f"❌ Error PDF: {e}")
+                    st.error(f"❌ Error al generar o enviar PDF: {e}")
 
             st.markdown("<br>", unsafe_allow_html=True)
             col1, col2, col3 = st.columns([1, 2, 1])
@@ -729,7 +733,8 @@ elif st.session_state.examen_enviado:
     <div style="text-align:center; padding:60px 20px;">
         <div style="font-size:48px;">✅</div>
         <p style="font-size:16px; color:#333; margin-top:16px;">
-            <strong>Examen completado y enviado a Jefatura.</strong>
+            <strong>Examen enviado a Jefatura.</strong><br>
+            El PDF fue enviado al email de jefatura.
         </p>
     </div>
     """, unsafe_allow_html=True)
