@@ -75,44 +75,43 @@ def extraer_texto_pdf(pdf_file):
         return None
 
 def limpiar_json(texto):
+    """Limpia agresivamente el JSON para parsing"""
+    # Quitar backticks
     texto = re.sub(r'```json\s*', '', texto)
     texto = re.sub(r'```\s*', '', texto)
-    texto = texto.strip()
-    match = re.search(r'\[[\s\S]*\]', texto)
-    return match.group(0) if match else texto
+    
+    # Encontrar primer { y último }
+    inicio = texto.find('{')
+    final = texto.rfind('}')
+    
+    if inicio >= 0 and final > inicio:
+        texto = texto[inicio:final+1]
+    
+    return texto.strip()
 
 def crear_base_conocimiento(textos_capitulos):
     """FASE 1: Crea base de conocimiento estructurada de TODOS los capítulos"""
     texto_completo = "\n\n===== NUEVO CAPÍTULO =====\n\n".join(textos_capitulos)
     
-    prompt = f"""ERES UN EXPERTO EN CIRUGÍA PLÁSTICA DEL CONSEJO MEXICANO.
+    prompt = f"""ERES UN EXPERTO EN CIRUGÍA PLÁSTICA.
 
-ANALIZA COMPLETAMENTE ESTOS CAPÍTULOS:
-{texto_completo[:20000]}
+CONTENIDO A ANALIZAR (PRIMERAS 15000 PALABRAS):
+{texto_completo[:15000]}
 
-EXTRAE Y ESTRUCTURA LA INFORMACIÓN EN ESTOS 8 APARTADOS CLÍNICOS OBLIGATORIOS:
+EXTRAE INFORMACIÓN EN ESTOS 8 APARTADOS Y RESPONDE ÚNICAMENTE EN JSON VÁLIDO:
 
-1. DEFINICIÓN Y CONCEPTOS CLAVE: Qué es, términos clínicos exactos, sinónimos
-2. ANATOMÍA PERTINENTE: Estructuras anatómicas específicas, relaciones vasculonerviosas, planos quirúrgicos
-3. FISIOPATOLOGÍA: Mecanismos de enfermedad, cambios tisulares, progresión
-4. CLASIFICACIONES: Sistemas de clasificación específicos (Matarasso, Huger, etc.), grados, tipos
-5. TRATAMIENTO QUIRÚRGICO: Indicaciones exactas, contraindicaciones, técnicas específicas, paso a paso
-6. TRATAMIENTO NO QUIRÚRGICO: Alternativas médicas, cuándo NO operar, manejo conservador
-7. PRONÓSTICO Y COMPLICACIONES: Resultados esperados, complicaciones específicas, cómo resolverlas
-8. PROCEDIMIENTOS SECUNDARIOS: Complementos quirúrgicos, timing, cuándo y cómo aplicarlos
+{{
+  "definicion": "[Qué es, términos clínicos exactos]",
+  "anatomia": "[Estructuras anatómicas, relaciones vasculonerviosas, planos]",
+  "fisiopatologia": "[Mecanismos de enfermedad, cambios tisulares]",
+  "clasificaciones": "[Sistemas de clasificación (Matarasso, Huger, etc.)]",
+  "tratamiento_quirurgico": "[Indicaciones, contraindicaciones, técnicas]",
+  "tratamiento_no_quirurgico": "[Alternativas médicas, cuándo NO operar]",
+  "pronostico_complicaciones": "[Resultados esperados, complicaciones, resolución]",
+  "procedimientos_secundarios": "[Complementos quirúrgicos, timing, aplicación]"
+}}
 
-RESPONDE ÚNICAMENTE EN JSON, SIN TEXTO ADICIONAL:
-
-{
-  "definicion": "texto exacto de definición y conceptos clave",
-  "anatomia": "detalles anatómicos pertinentes con precisión",
-  "fisiopatologia": "mecanismos de enfermedad y cambios tisulares",
-  "clasificaciones": "sistemas de clasificación específicos del tema",
-  "tratamiento_quirurgico": "indicaciones, contraindicaciones, técnicas detalladas",
-  "tratamiento_no_quirurgico": "opciones médicas, cuándo no operar",
-  "pronostico_complicaciones": "resultados, complicaciones, resolución",
-  "procedimientos_secundarios": "complementos, timing, aplicación"
-}"""
+SIN BACKTICKS. SIN TEXTO ADICIONAL. SOLO JSON."""
 
     client = Groq(api_key=GROQ_API_KEY)
     try:
@@ -120,11 +119,26 @@ RESPONDE ÚNICAMENTE EN JSON, SIN TEXTO ADICIONAL:
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=4000
+            max_tokens=3000
         )
         raw = response.choices[0].message.content
         limpio = limpiar_json(raw)
-        return json.loads(limpio)
+        
+        # Intentar parsear
+        base = json.loads(limpio)
+        
+        # Validar que tenga los campos esperados
+        campos = ['definicion', 'anatomia', 'fisiopatologia', 'clasificaciones', 
+                 'tratamiento_quirurgico', 'tratamiento_no_quirurgico', 
+                 'pronostico_complicaciones', 'procedimientos_secundarios']
+        
+        for campo in campos:
+            if campo not in base:
+                base[campo] = "Información no disponible"
+        
+        return base
+    except json.JSONDecodeError as e:
+        raise Exception(f"JSON inválido: {str(e)[:100]}")
     except Exception as e:
         raise Exception(f"Error análisis: {str(e)}")
 
