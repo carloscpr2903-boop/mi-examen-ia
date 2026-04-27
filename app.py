@@ -1,18 +1,19 @@
 import streamlit as st
-import google.generativeai as genai
 import pypdf
 import json
 import requests
 import time
 import re
 import io
+import os
 from datetime import datetime
+from groq import Groq
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
+from reportlab.lib.enums import TA_CENTER
 
 # ─────────────────────────────────────────────
 # 1. CONFIGURACIÓN DE PÁGINA
@@ -25,7 +26,15 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# 2. ESTILOS CSS
+# 2. API KEY (oculta en secrets, usuario no la ve)
+# ─────────────────────────────────────────────
+try:
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+except:
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+# ─────────────────────────────────────────────
+# 3. ESTILOS CSS
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -54,11 +63,6 @@ st.markdown("""
     color: #D4AF37 !important;
     font-family: 'Playfair Display', serif !important;
     text-align: center !important;
-}
-
-h1, h2, h3 {
-    color: #001F5B !important;
-    font-family: 'Playfair Display', serif !important;
 }
 
 div.stButton > button {
@@ -91,12 +95,13 @@ div.stButton > button {
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# 3. CONSTANTES
+# 4. CONSTANTES
 # ─────────────────────────────────────────────
 URL_SHEET = "https://script.google.com/macros/s/AKfycbzcPskzds81UQjWfa1BEQpZZgeCB2vwQ-PajzYEpn31ynQ8-obawAnVIn9018uDh5o5/exec"
+MODELO    = "llama-3.3-70b-versatile"  # Gratis en Groq, excelente para español
 
 # ─────────────────────────────────────────────
-# 4. FUNCIONES
+# 5. FUNCIONES
 # ─────────────────────────────────────────────
 
 def extraer_texto_pdf(pdf_file):
@@ -108,7 +113,7 @@ def extraer_texto_pdf(pdf_file):
             if t:
                 texto += f"\n--- Página {i+1} ---\n{t}"
         return texto.strip()
-    except Exception as e:
+    except:
         return None
 
 def limpiar_json(texto):
@@ -116,27 +121,14 @@ def limpiar_json(texto):
     texto = re.sub(r'```\s*', '', texto)
     texto = texto.strip()
     match = re.search(r'\[[\s\S]*\]', texto)
-    if match:
-        return match.group(0)
-    return texto
+    return match.group(0) if match else texto
 
-def inicializar_modelo(api_key):
-    genai.configure(api_key=api_key)
-    modelos = [m.name for m in genai.list_models()
-               if 'generateContent' in m.supported_generation_methods]
-    for pref in ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']:
-        match = next((m for m in modelos if pref in m), None)
-        if match:
-            return genai.GenerativeModel(match), match
-    return genai.GenerativeModel(modelos[0]), modelos[0]
-
-def generar_preguntas(model, texto_pdf, num_total):
-    # Distribuir preguntas por nivel
-    base = num_total // 3
-    resto = num_total % 3
+def generar_preguntas(texto_pdf, num_total):
+    base       = num_total // 3
+    resto      = num_total % 3
     n_sencilla = base + (1 if resto >= 1 else 0)
-    n_moderada  = base + (1 if resto >= 2 else 0)
-    n_dificil   = base
+    n_moderada = base + (1 if resto >= 2 else 0)
+    n_dificil  = base
 
     prompt = f"""Eres un experto evaluador para el Consejo Mexicano de Cirugía Plástica, Estética y Reconstructiva.
 
@@ -144,19 +136,19 @@ Basado en este contenido quirúrgico especializado:
 {texto_pdf[:12000]}
 
 Genera exactamente {num_total} preguntas de examen NIVEL CONSEJO en español:
-- {n_sencilla} preguntas de nivel "Sencilla" (anatomía, conceptos clave, indicaciones)
+- {n_sencilla} preguntas de nivel "Sencilla" (anatomía, conceptos clave, indicaciones básicas)
 - {n_moderada} preguntas de nivel "Moderada" (decisiones clínicas, técnica quirúrgica, complicaciones)
 - {n_dificil} preguntas de nivel "Difícil" (casos complejos, razonamiento crítico, manejo avanzado)
 
 REQUISITOS OBLIGATORIOS:
 - Todo en ESPAÑOL
 - Basadas 100% en el contenido del documento
-- Razonamiento quirúrgico real (NO triviales)
-- Opciones distractoras clínicamente plausibles y creíbles
+- Razonamiento quirúrgico real, NO triviales
+- Opciones distractoras clínicamente plausibles
 - Una sola respuesta correcta inequívoca
-- Justificación detallada que cita el principio del documento
+- Justificación detallada citando el principio del documento
 
-RESPONDE ÚNICAMENTE CON JSON PURO. Sin texto adicional. Sin backticks. Solo el array:
+RESPONDE ÚNICAMENTE CON JSON PURO. Sin texto adicional. Sin backticks:
 [
   {{
     "id": 1,
@@ -168,11 +160,14 @@ RESPONDE ÚNICAMENTE CON JSON PURO. Sin texto adicional. Sin backticks. Solo el 
   }}
 ]"""
 
-    response = model.generate_content(
-        prompt,
-        generation_config={"temperature": 0.7, "max_output_tokens": 5000}
+    client = Groq(api_key=GROQ_API_KEY)
+    response = client.chat.completions.create(
+        model=MODELO,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=5000
     )
-    return response.text
+    return response.choices[0].message.content
 
 def calcular_estadisticas(examen_data, answers):
     stats = {
@@ -189,7 +184,7 @@ def calcular_estadisticas(examen_data, answers):
         stats[nivel]["total"] += 1
 
         idx = ord(item['correcta'].upper()) - 65
-        opcion_correcta = item['opciones'][idx] if idx < len(item['opciones']) else "N/A"
+        opcion_correcta  = item['opciones'][idx] if idx < len(item['opciones']) else "N/A"
         respuesta_usuario = answers.get(item['id'], "Sin respuesta")
         es_correcto = respuesta_usuario == opcion_correcta
 
@@ -208,142 +203,60 @@ def calcular_estadisticas(examen_data, answers):
         })
 
     total_correctas = sum(s["correctas"] for s in stats.values())
-    total_preg = sum(s["total"] for s in stats.values())
+    total_preg      = sum(s["total"] for s in stats.values())
     nota = round((total_correctas / total_preg) * 10, 1) if total_preg > 0 else 0
     return stats, detalle, nota, total_correctas, total_preg
 
 def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     buffer = io.BytesIO()
 
-    # Colores institucionales
-    NAVY    = colors.HexColor('#001F5B')
-    DORADO  = colors.HexColor('#D4AF37')
-    GRIS    = colors.HexColor('#F5F5F5')
-    VERDE   = colors.HexColor('#2E7D32')
-    ROJO    = colors.HexColor('#C62828')
-    NEGRO   = colors.black
-    BLANCO  = colors.white
+    NAVY   = colors.HexColor('#001F5B')
+    DORADO = colors.HexColor('#D4AF37')
+    GRIS   = colors.HexColor('#F5F5F5')
+    VERDE  = colors.HexColor('#2E7D32')
+    ROJO   = colors.HexColor('#C62828')
+    NEGRO  = colors.black
+    BLANCO = colors.white
 
     doc = SimpleDocTemplate(
-        buffer,
-        pagesize=letter,
-        leftMargin=0.75*inch,
-        rightMargin=0.75*inch,
-        topMargin=0.75*inch,
-        bottomMargin=0.75*inch
+        buffer, pagesize=letter,
+        leftMargin=0.75*inch, rightMargin=0.75*inch,
+        topMargin=0.75*inch,  bottomMargin=0.75*inch
     )
 
-    # Estilos
-    estilos = getSampleStyleSheet()
+    def estilo(nombre, **kwargs):
+        return ParagraphStyle(nombre, **kwargs)
 
-    estilo_titulo = ParagraphStyle(
-        'Titulo',
-        fontName='Helvetica-Bold',
-        fontSize=16,
-        textColor=NAVY,
-        alignment=TA_CENTER,
-        spaceAfter=4
-    )
-    estilo_subtitulo = ParagraphStyle(
-        'Subtitulo',
-        fontName='Helvetica',
-        fontSize=10,
-        textColor=DORADO,
-        alignment=TA_CENTER,
-        spaceAfter=2
-    )
-    estilo_seccion = ParagraphStyle(
-        'Seccion',
-        fontName='Helvetica-Bold',
-        fontSize=12,
-        textColor=NAVY,
-        spaceBefore=14,
-        spaceAfter=6
-    )
-    estilo_pregunta = ParagraphStyle(
-        'Pregunta',
-        fontName='Helvetica-Bold',
-        fontSize=10,
-        textColor=NEGRO,
-        spaceBefore=10,
-        spaceAfter=4,
-        leading=14
-    )
-    estilo_opcion = ParagraphStyle(
-        'Opcion',
-        fontName='Helvetica',
-        fontSize=10,
-        textColor=NEGRO,
-        leftIndent=16,
-        spaceAfter=2,
-        leading=13
-    )
-    estilo_opcion_correcta = ParagraphStyle(
-        'OpcionCorrecta',
-        fontName='Helvetica-Bold',
-        fontSize=10,
-        textColor=VERDE,
-        leftIndent=16,
-        spaceAfter=2,
-        leading=13
-    )
-    estilo_opcion_incorrecta = ParagraphStyle(
-        'OpcionIncorrecta',
-        fontName='Helvetica',
-        fontSize=10,
-        textColor=ROJO,
-        leftIndent=16,
-        spaceAfter=2,
-        leading=13
-    )
-    estilo_justificacion = ParagraphStyle(
-        'Justificacion',
-        fontName='Helvetica-Oblique',
-        fontSize=9,
-        textColor=colors.HexColor('#333333'),
-        leftIndent=16,
-        spaceBefore=4,
-        spaceAfter=6,
-        leading=13,
-        backColor=GRIS
-    )
-    estilo_normal = ParagraphStyle(
-        'Normal2',
-        fontName='Helvetica',
-        fontSize=10,
-        textColor=NEGRO,
-        leading=14,
-        spaceAfter=4
-    )
-    estilo_dato = ParagraphStyle(
-        'Dato',
-        fontName='Helvetica',
-        fontSize=10,
-        textColor=NEGRO,
-        leading=14
-    )
+    E_TITULO    = estilo('Titulo',    fontName='Helvetica-Bold', fontSize=16, textColor=NAVY,  alignment=TA_CENTER, spaceAfter=4)
+    E_SUBTITULO = estilo('Sub',       fontName='Helvetica',      fontSize=10, textColor=DORADO, alignment=TA_CENTER, spaceAfter=2)
+    E_SECCION   = estilo('Sec',       fontName='Helvetica-Bold', fontSize=12, textColor=NAVY,  spaceBefore=14, spaceAfter=6)
+    E_PREGUNTA  = estilo('Preg',      fontName='Helvetica-Bold', fontSize=10, textColor=NEGRO, spaceBefore=10, spaceAfter=4, leading=14)
+    E_OPCION    = estilo('Op',        fontName='Helvetica',      fontSize=10, textColor=NEGRO, leftIndent=16, spaceAfter=2, leading=13)
+    E_CORRECTA  = estilo('Cor',       fontName='Helvetica-Bold', fontSize=10, textColor=VERDE, leftIndent=16, spaceAfter=2, leading=13)
+    E_INCORRECTA= estilo('Inc',       fontName='Helvetica',      fontSize=10, textColor=ROJO,  leftIndent=16, spaceAfter=2, leading=13)
+    E_JUST      = estilo('Just',      fontName='Helvetica-Oblique', fontSize=9, textColor=colors.HexColor('#333333'), leftIndent=16, spaceBefore=4, spaceAfter=6, leading=13, backColor=GRIS)
+    E_DATO      = estilo('Dato',      fontName='Helvetica',      fontSize=10, textColor=NEGRO, leading=14)
+    E_PIE       = estilo('Pie',       fontName='Helvetica',      fontSize=8,  textColor=colors.HexColor('#888888'), alignment=TA_CENTER)
 
     historia = []
 
-    # ── ENCABEZADO ──
-    historia.append(Paragraph("HGC — EVALUACIÓN DE ALTA ESPECIALIDAD", estilo_titulo))
-    historia.append(Paragraph("División de Cirugía Plástica, Estética y Reconstructiva", estilo_subtitulo))
-    historia.append(Paragraph("División de Estudios de Posgrado e Investigación", estilo_subtitulo))
+    historia.append(Paragraph("HGC — EVALUACIÓN DE ALTA ESPECIALIDAD", E_TITULO))
+    historia.append(Paragraph("División de Cirugía Plástica, Estética y Reconstructiva", E_SUBTITULO))
+    historia.append(Paragraph("División de Estudios de Posgrado e Investigación", E_SUBTITULO))
     historia.append(Spacer(1, 6))
     historia.append(HRFlowable(width="100%", thickness=2, color=DORADO))
     historia.append(Spacer(1, 8))
 
-    # ── DATOS DEL RESIDENTE ──
     total_correctas = sum(s["correctas"] for s in stats.values())
     total_preg      = sum(s["total"] for s in stats.values())
 
     tabla_datos = Table([
-        [Paragraph("<b>Residente:</b>", estilo_dato),   Paragraph(nombre, estilo_dato),
-         Paragraph("<b>Fecha:</b>", estilo_dato),        Paragraph(fecha, estilo_dato)],
-        [Paragraph("<b>Grado:</b>", estilo_dato),        Paragraph(grado, estilo_dato),
-         Paragraph("<b>Calificación:</b>", estilo_dato), Paragraph(f"{nota}/10", estilo_dato)],
-        [Paragraph("<b>Total preguntas:</b>", estilo_dato), Paragraph(str(total_preg), estilo_dato),
-         Paragraph("<b>Correctas:</b>", estilo_dato),    Paragraph(f"{total_correctas}/{total_preg}", estilo_dato)],
+        [Paragraph("<b>Residente:</b>", E_DATO),       Paragraph(nombre, E_DATO),
+         Paragraph("<b>Fecha:</b>", E_DATO),            Paragraph(fecha, E_DATO)],
+        [Paragraph("<b>Grado:</b>", E_DATO),            Paragraph(grado, E_DATO),
+         Paragraph("<b>Calificación:</b>", E_DATO),     Paragraph(f"{nota}/10", E_DATO)],
+        [Paragraph("<b>Total preguntas:</b>", E_DATO),  Paragraph(str(total_preg), E_DATO),
+         Paragraph("<b>Correctas:</b>", E_DATO),        Paragraph(f"{total_correctas}/{total_preg}", E_DATO)],
     ], colWidths=[1.3*inch, 2.2*inch, 1.3*inch, 2.2*inch])
 
     tabla_datos.setStyle(TableStyle([
@@ -356,26 +269,24 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     historia.append(tabla_datos)
     historia.append(Spacer(1, 10))
 
-    # ── RESUMEN POR NIVEL ──
-    historia.append(Paragraph("RESUMEN DE DESEMPEÑO POR NIVEL", estilo_seccion))
+    historia.append(Paragraph("RESUMEN DE DESEMPEÑO POR NIVEL", E_SECCION))
     historia.append(HRFlowable(width="100%", thickness=1, color=DORADO))
     historia.append(Spacer(1, 6))
 
-    fila_encabezado = [
-        Paragraph("<b>Nivel</b>", estilo_dato),
-        Paragraph("<b>Correctas</b>", estilo_dato),
-        Paragraph("<b>Total</b>", estilo_dato),
-        Paragraph("<b>Porcentaje</b>", estilo_dato)
-    ]
-    filas_stats = [fila_encabezado]
+    filas_stats = [[
+        Paragraph("<b>Nivel</b>", E_DATO),
+        Paragraph("<b>Correctas</b>", E_DATO),
+        Paragraph("<b>Total</b>", E_DATO),
+        Paragraph("<b>Porcentaje</b>", E_DATO)
+    ]]
     for nivel in ['Sencilla', 'Moderada', 'Difícil']:
-        s = stats.get(nivel, {"correctas": 0, "total": 0})
+        s   = stats.get(nivel, {"correctas": 0, "total": 0})
         pct = round((s['correctas'] / s['total']) * 100) if s['total'] > 0 else 0
         filas_stats.append([
-            Paragraph(nivel, estilo_dato),
-            Paragraph(str(s['correctas']), estilo_dato),
-            Paragraph(str(s['total']), estilo_dato),
-            Paragraph(f"{pct}%", estilo_dato)
+            Paragraph(nivel, E_DATO),
+            Paragraph(str(s['correctas']), E_DATO),
+            Paragraph(str(s['total']), E_DATO),
+            Paragraph(f"{pct}%", E_DATO)
         ])
 
     tabla_stats = Table(filas_stats, colWidths=[1.8*inch, 1.5*inch, 1.5*inch, 1.8*inch])
@@ -391,59 +302,44 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     historia.append(tabla_stats)
     historia.append(Spacer(1, 16))
 
-    # ── PREGUNTAS Y RESPUESTAS COMPLETAS ──
-    historia.append(Paragraph("EXAMEN COMPLETO — PREGUNTAS Y RETROALIMENTACIÓN", estilo_seccion))
+    historia.append(Paragraph("EXAMEN COMPLETO — PREGUNTAS Y RETROALIMENTACIÓN", E_SECCION))
     historia.append(HRFlowable(width="100%", thickness=1, color=DORADO))
     historia.append(Spacer(1, 6))
 
     for r in detalle:
-        # Número y nivel
-        nivel_texto = f"Pregunta {r['id']}  |  Nivel: {r['nivel']}  |  {'✓ CORRECTA' if r['es_correcto'] else '✗ INCORRECTA'}"
         color_nivel = VERDE if r['es_correcto'] else ROJO
+        E_NUM = estilo(f'N{r["id"]}', fontName='Helvetica-Bold', fontSize=9,
+                       textColor=color_nivel, spaceBefore=10, spaceAfter=3)
+        historia.append(Paragraph(
+            f"Pregunta {r['id']}  |  Nivel: {r['nivel']}  |  {'✓ CORRECTA' if r['es_correcto'] else '✗ INCORRECTA'}",
+            E_NUM
+        ))
+        historia.append(Paragraph(r['pregunta'], E_PREGUNTA))
 
-        estilo_num = ParagraphStyle(
-            f'Num{r["id"]}',
-            fontName='Helvetica-Bold',
-            fontSize=9,
-            textColor=color_nivel,
-            spaceBefore=10,
-            spaceAfter=3
-        )
-        historia.append(Paragraph(nivel_texto, estilo_num))
-
-        # Texto de pregunta
-        historia.append(Paragraph(r['pregunta'], estilo_pregunta))
-
-        # Opciones
         for opcion in r['opciones']:
-            letra = opcion[0].upper() if opcion else ""
+            letra          = opcion[0].upper() if opcion else ""
             letra_correcta = r['opcion_correcta'][0].upper() if r['opcion_correcta'] else ""
             letra_usuario  = r['respuesta_usuario'][0].upper() if r['respuesta_usuario'] else ""
 
             if letra == letra_correcta and letra == letra_usuario:
-                # Correcta y seleccionada
-                historia.append(Paragraph(f"✓ {opcion}  ← Tu respuesta (correcta)", estilo_opcion_correcta))
+                historia.append(Paragraph(f"✓ {opcion}  <- Tu respuesta (correcta)", E_CORRECTA))
             elif letra == letra_correcta:
-                # Correcta pero no seleccionada
-                historia.append(Paragraph(f"✓ {opcion}  ← Respuesta correcta", estilo_opcion_correcta))
+                historia.append(Paragraph(f"✓ {opcion}  <- Respuesta correcta", E_CORRECTA))
             elif letra == letra_usuario:
-                # Seleccionada pero incorrecta
-                historia.append(Paragraph(f"✗ {opcion}  ← Tu respuesta (incorrecta)", estilo_opcion_incorrecta))
+                historia.append(Paragraph(f"✗ {opcion}  <- Tu respuesta (incorrecta)", E_INCORRECTA))
             else:
-                historia.append(Paragraph(opcion, estilo_opcion))
+                historia.append(Paragraph(opcion, E_OPCION))
 
-        # Justificación
         historia.append(Spacer(1, 4))
-        historia.append(Paragraph(f"<b>Justificación:</b> {r['justificacion']}", estilo_justificacion))
+        historia.append(Paragraph(f"<b>Justificacion:</b> {r['justificacion']}", E_JUST))
         historia.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#DDDDDD')))
 
-    # ── PIE DE PÁGINA ──
     historia.append(Spacer(1, 20))
     historia.append(HRFlowable(width="100%", thickness=1, color=DORADO))
     historia.append(Spacer(1, 6))
     historia.append(Paragraph(
         f"Hospital General de Culiacán · Cirugía Plástica y Reconstructiva · Generado el {fecha}",
-        ParagraphStyle('Pie', fontName='Helvetica', fontSize=8, textColor=colors.HexColor('#888888'), alignment=TA_CENTER)
+        E_PIE
     ))
 
     doc.build(historia)
@@ -451,13 +347,12 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     return buffer
 
 # ─────────────────────────────────────────────
-# 5. SESSION STATE
+# 6. SESSION STATE
 # ─────────────────────────────────────────────
 for key, val in {
     'examen_data': None,
     'answers': {},
     'examen_enviado': False,
-    'modelo_nombre': None,
     'detalle_resultados': None,
     'stats_resultados': None,
     'nota_final': None
@@ -466,7 +361,7 @@ for key, val in {
         st.session_state[key] = val
 
 # ─────────────────────────────────────────────
-# 6. SIDEBAR
+# 7. SIDEBAR (sin campo de API key)
 # ─────────────────────────────────────────────
 with st.sidebar:
     logo_url = "https://raw.githubusercontent.com/carloscpr2903-boop/mi-examen-ia/main/Logotipo%20Principal%20Sin%20Fondo%20(1).png"
@@ -479,36 +374,31 @@ with st.sidebar:
     st.markdown("## REGISTRO")
     st.markdown("---")
 
-    nombre  = st.text_input("👤 Nombre del Residente", placeholder="Dr./Dra. Apellido Nombre")
-    grado   = st.selectbox("🎓 Grado", ["R1", "R2", "R3", "R4 (Jefe)"])
-    api_key = st.text_input("🔑 Gemini API Key", type="password", placeholder="AIza...").strip()
+    nombre   = st.text_input("👤 Nombre del Residente", placeholder="Dr./Dra. Apellido Nombre")
+    grado    = st.selectbox("🎓 Grado", ["R1", "R2", "R3", "R4 (Jefe)"])
     pdf_file = st.file_uploader("📄 Cargar PDF Técnico", type="pdf")
 
     st.markdown("---")
     num_preguntas = st.slider(
         "📝 Número de preguntas",
-        min_value=3,
-        max_value=30,
-        value=9,
-        step=3,
-        help="Múltiplos de 3 recomendados para distribución equitativa por nivel"
+        min_value=3, max_value=30, value=9, step=3,
+        help="Múltiplos de 3 para distribución equitativa por nivel"
     )
 
     st.markdown("---")
-    if api_key and pdf_file and nombre:
+    if nombre and pdf_file:
         st.markdown("✅ **Sistema listo**")
     else:
         faltantes = []
         if not nombre:   faltantes.append("• Nombre")
-        if not api_key:  faltantes.append("• API Key")
         if not pdf_file: faltantes.append("• PDF")
         st.markdown("⚠️ **Pendiente:**\n" + "\n".join(faltantes))
 
-    if st.session_state.modelo_nombre:
-        st.markdown(f"🤖 `{st.session_state.modelo_nombre.split('/')[-1]}`")
+    if not GROQ_API_KEY:
+        st.error("⚙️ API Key no configurada en secrets.")
 
 # ─────────────────────────────────────────────
-# 7. ENCABEZADO PRINCIPAL
+# 8. ENCABEZADO PRINCIPAL
 # ─────────────────────────────────────────────
 st.markdown("""
 <div style="text-align:center; padding: 10px 0;">
@@ -523,9 +413,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# 8. GENERACIÓN DEL EXAMEN
+# 9. GENERACIÓN DEL EXAMEN
 # ─────────────────────────────────────────────
-if pdf_file and api_key and nombre:
+if pdf_file and nombre and GROQ_API_KEY:
 
     col1, col2 = st.columns([2, 3])
     with col1:
@@ -536,21 +426,21 @@ if pdf_file and api_key and nombre:
             st.markdown(f"<p style='color:#001F5B; margin-top:12px;'>✅ Examen activo · {respondidas}/{len(st.session_state.examen_data)} respondidas</p>", unsafe_allow_html=True)
         if st.session_state.examen_enviado:
             if st.button("🔄 NUEVO EXAMEN", use_container_width=True):
-                st.session_state.examen_data = None
-                st.session_state.answers = {}
-                st.session_state.examen_enviado = False
+                st.session_state.examen_data        = None
+                st.session_state.answers            = {}
+                st.session_state.examen_enviado     = False
                 st.session_state.detalle_resultados = None
-                st.session_state.stats_resultados = None
-                st.session_state.nota_final = None
+                st.session_state.stats_resultados   = None
+                st.session_state.nota_final         = None
                 st.rerun()
 
     if generar:
-        st.session_state.examen_data      = None
-        st.session_state.answers          = {}
-        st.session_state.examen_enviado   = False
+        st.session_state.examen_data        = None
+        st.session_state.answers            = {}
+        st.session_state.examen_enviado     = False
         st.session_state.detalle_resultados = None
-        st.session_state.stats_resultados = None
-        st.session_state.nota_final       = None
+        st.session_state.stats_resultados   = None
+        st.session_state.nota_final         = None
 
         error_msg = None
         preguntas = None
@@ -563,16 +453,11 @@ if pdf_file and api_key and nombre:
                     raise Exception("No se pudo extraer texto del PDF.")
                 st.write(f"✅ PDF procesado · {len(texto_pdf):,} caracteres")
 
-                st.write("🤖 Conectando con Gemini...")
-                model, model_name = inicializar_modelo(api_key)
-                st.session_state.modelo_nombre = model_name
-                st.write(f"✅ Modelo: {model_name.split('/')[-1]}")
-
                 st.write(f"🧠 Generando {num_preguntas} preguntas nivel Consejo...")
                 for intento in range(3):
                     try:
-                        raw    = generar_preguntas(model, texto_pdf, num_preguntas)
-                        limpio = limpiar_json(raw)
+                        raw       = generar_preguntas(texto_pdf, num_preguntas)
+                        limpio    = limpiar_json(raw)
                         preguntas = json.loads(limpio)
                         if not isinstance(preguntas, list) or len(preguntas) == 0:
                             raise ValueError("JSON inválido")
@@ -595,10 +480,8 @@ if pdf_file and api_key and nombre:
                 error_msg = str(e)
 
         if error_msg:
-            if "API_KEY" in error_msg or "invalid" in error_msg.lower():
-                st.error("❌ API Key inválida. Verifica en https://aistudio.google.com/apikey")
-            elif "quota" in error_msg.lower():
-                st.error("❌ Cuota de API agotada. Espera unos minutos o usa otra key.")
+            if "rate_limit" in error_msg.lower() or "quota" in error_msg.lower():
+                st.error("❌ Límite de requests alcanzado. Espera 1 minuto e intenta de nuevo.")
             else:
                 st.error(f"❌ Error: {error_msg}")
         elif preguntas:
@@ -606,26 +489,29 @@ if pdf_file and api_key and nombre:
             st.session_state.answers     = {}
             st.rerun()
 
-elif not nombre or not api_key or not pdf_file:
+elif not GROQ_API_KEY:
+    st.error("⚙️ La API Key no está configurada. Contacta al administrador del sistema.")
+
+elif not nombre or not pdf_file:
     st.markdown("""
     <div style="text-align:center; padding:60px 20px;">
         <div style="font-size:48px;">🏥</div>
         <p style="font-size:16px; color:#666; margin-top:16px;">
             <strong>Sistema de Evaluación HGC</strong><br><br>
             Completa los campos en el panel izquierdo:<br>
-            <strong>Nombre · API Key · PDF · Número de preguntas</strong>
+            <strong>Nombre · PDF · Número de preguntas</strong>
         </p>
     </div>
     """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# 9. EXAMEN
+# 10. EXAMEN
 # ─────────────────────────────────────────────
 if st.session_state.examen_data and not st.session_state.examen_enviado:
 
-    examen_data = st.session_state.examen_data
-    total_preg  = len(examen_data)
-    respondidas = len([a for a in st.session_state.answers.values() if a])
+    examen_data  = st.session_state.examen_data
+    total_preg   = len(examen_data)
+    respondidas  = len([a for a in st.session_state.answers.values() if a])
 
     st.markdown(f"**Progreso:** {respondidas}/{total_preg} preguntas respondidas")
     st.progress(respondidas / total_preg if total_preg > 0 else 0)
@@ -634,8 +520,8 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
     NIVEL_COLOR = {'Sencilla': '#2E7D32', 'Moderada': '#E65100', 'Difícil': '#C62828'}
 
     for item in examen_data:
-        nivel  = item.get('nivel', 'Sencilla')
-        color  = NIVEL_COLOR.get(nivel, '#001F5B')
+        nivel = item.get('nivel', 'Sencilla')
+        color = NIVEL_COLOR.get(nivel, '#001F5B')
 
         st.markdown(f"""
         <div style="background:white; border:1px solid #E8E8E8; border-left:4px solid #001F5B;
@@ -670,7 +556,6 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
         st.markdown("<br>", unsafe_allow_html=True)
 
     st.markdown("---")
-
     if respondidas < total_preg:
         st.warning(f"⚠️ {total_preg - respondidas} pregunta(s) sin responder.")
 
@@ -682,9 +567,6 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
         if respondidas < total_preg:
             st.error("❌ Responde todas las preguntas antes de enviar.")
         else:
-            # ─────────────────────────────────────────────
-            # 10. RESULTADOS
-            # ─────────────────────────────────────────────
             st.session_state.examen_enviado = True
             stats, detalle, nota, total_correctas, total_count = calcular_estadisticas(
                 examen_data, st.session_state.answers
@@ -693,7 +575,6 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
             st.session_state.stats_resultados   = stats
             st.session_state.nota_final         = nota
 
-            # Calificación
             if nota >= 8:
                 emoji, mensaje, color_nota = "🏆", "EXCELENTE", "#D4AF37"
             elif nota >= 6:
@@ -718,16 +599,14 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
             </div>
             """, unsafe_allow_html=True)
 
-            # Métricas por nivel
             st.markdown("### 📊 Desempeño por Nivel")
             col1, col2, col3 = st.columns(3)
             for col, nivel in zip([col1, col2, col3], ['Sencilla', 'Moderada', 'Difícil']):
-                s = stats.get(nivel, {"correctas": 0, "total": 0})
+                s   = stats.get(nivel, {"correctas": 0, "total": 0})
                 pct = round((s["correctas"] / s["total"]) * 100) if s["total"] > 0 else 0
                 with col:
                     st.metric(f"Nivel {nivel}", f"{s['correctas']}/{s['total']}", f"{pct}%")
 
-            # Retroalimentación
             st.markdown("---")
             st.markdown("### 🔍 Retroalimentación Detallada")
 
@@ -744,22 +623,21 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
                     color_borde = "#2E7D32" if r['es_correcto'] else "#C62828"
                     bg_color    = "#F1F8F1" if r['es_correcto'] else "#FFF1F1"
                     icono       = "✅" if r['es_correcto'] else "❌"
+                    respuesta_correcta_html = "" if r['es_correcto'] else f'<p style="font-size:13px; color:#2E7D32; margin:0 0 4px 0;"><strong>Respuesta correcta:</strong> {r["opcion_correcta"]}</p>'
 
                     st.markdown(f"""
                     <div style="background:{bg_color}; border-left:4px solid {color_borde};
                                 border-radius:4px; padding:16px 20px; margin-bottom:16px;">
-                        <p style="font-size:13px; font-weight:700; color:{color_borde};
-                                   margin:0 0 8px 0; letter-spacing:0.5px;">
+                        <p style="font-size:13px; font-weight:700; color:{color_borde}; margin:0 0 8px 0;">
                             {icono} P{r['id']} · {r['nivel']}
                         </p>
-                        <p style="font-size:14px; font-weight:600; color:#111111;
-                                   margin:0 0 10px 0; line-height:1.5;">
+                        <p style="font-size:14px; font-weight:600; color:#111111; margin:0 0 10px 0; line-height:1.5;">
                             {r['pregunta']}
                         </p>
                         <p style="font-size:13px; color:#222222; margin:0 0 4px 0;">
                             <strong>Tu respuesta:</strong> {r['respuesta_usuario']}
                         </p>
-                        {"" if r['es_correcto'] else f'<p style="font-size:13px; color:#2E7D32; margin:0 0 4px 0;"><strong>Respuesta correcta:</strong> {r["opcion_correcta"]}</p>'}
+                        {respuesta_correcta_html}
                         <p style="font-size:12px; color:#444444; margin:10px 0 0 0;
                                    background:rgba(0,0,0,0.04); padding:8px 12px;
                                    border-radius:4px; line-height:1.6;">
@@ -782,39 +660,33 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
 
             # ── ENVIAR A GOOGLE SHEETS ──
             st.markdown("---")
-            errores_resumen = []
-            for r in incorrectas_list:
-                errores_resumen.append(f"P{r['id']} ({r['nivel']}): {r['pregunta'][:60]}... | Correcta: {r['opcion_correcta'][:30]}")
-
+            errores_resumen = [
+                f"P{r['id']} ({r['nivel']}): {r['pregunta'][:60]}... | Correcta: {r['opcion_correcta'][:30]}"
+                for r in incorrectas_list
+            ]
             payload = {
-                "nombre":     nombre,
-                "grado":      grado,
-                "fecha":      datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "nombre": nombre, "grado": grado,
+                "fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
                 "calificacion": nota,
                 "total_preguntas": total_count,
                 "total_correctas": total_correctas,
                 "total_incorrectas": total_count - total_correctas,
-                "sencillas":  f"{stats['Sencilla']['correctas']}/{stats['Sencilla']['total']}",
-                "moderadas":  f"{stats['Moderada']['correctas']}/{stats['Moderada']['total']}",
-                "dificiles":  f"{stats['Difícil']['correctas']}/{stats['Difícil']['total']}",
-                "errores":    " | ".join(errores_resumen) if errores_resumen else "Sin errores"
+                "sencillas": f"{stats['Sencilla']['correctas']}/{stats['Sencilla']['total']}",
+                "moderadas": f"{stats['Moderada']['correctas']}/{stats['Moderada']['total']}",
+                "dificiles": f"{stats['Difícil']['correctas']}/{stats['Difícil']['total']}",
+                "errores":   " | ".join(errores_resumen) if errores_resumen else "Sin errores"
             }
 
             with st.spinner("📤 Enviando resultados a Jefatura..."):
                 try:
-                    r = requests.post(URL_SHEET, json=payload, timeout=15)
+                    requests.post(URL_SHEET, json=payload, timeout=15)
                     st.success("✅ Resultados enviados a Jefatura.")
-                except requests.exceptions.Timeout:
-                    st.warning("⚠️ Tiempo de espera agotado al enviar.")
-                except requests.exceptions.ConnectionError:
-                    st.warning("⚠️ Sin conexión. Resultados no enviados.")
                 except Exception as e:
-                    st.warning(f"⚠️ Error al enviar: {e}")
+                    st.warning(f"⚠️ No se pudo enviar: {e}")
 
-            # ── DESCARGAR PDF ──
+            # ── PDF ──
             st.markdown("---")
             st.markdown("### 📄 Descargar Examen Completo en PDF")
-
             fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
             with st.spinner("📄 Generando PDF..."):
                 try:
@@ -829,7 +701,6 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
                         mime="application/pdf",
                         use_container_width=True
                     )
-                    st.success("✅ PDF generado correctamente.")
                 except Exception as e:
                     st.error(f"❌ Error al generar PDF: {e}")
 
@@ -838,12 +709,12 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 if st.button("🔄 GENERAR NUEVO EXAMEN", use_container_width=True):
-                    st.session_state.examen_data = None
-                    st.session_state.answers = {}
-                    st.session_state.examen_enviado = False
+                    st.session_state.examen_data        = None
+                    st.session_state.answers            = {}
+                    st.session_state.examen_enviado     = False
                     st.session_state.detalle_resultados = None
-                    st.session_state.stats_resultados = None
-                    st.session_state.nota_final = None
+                    st.session_state.stats_resultados   = None
+                    st.session_state.nota_final         = None
                     st.rerun()
 
 elif st.session_state.examen_enviado:
@@ -859,10 +730,10 @@ elif st.session_state.examen_enviado:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🔄 NUEVO EXAMEN", use_container_width=True):
-            st.session_state.examen_data = None
-            st.session_state.answers = {}
-            st.session_state.examen_enviado = False
+            st.session_state.examen_data        = None
+            st.session_state.answers            = {}
+            st.session_state.examen_enviado     = False
             st.session_state.detalle_resultados = None
-            st.session_state.stats_resultados = None
-            st.session_state.nota_final = None
+            st.session_state.stats_resultados   = None
+            st.session_state.nota_final         = None
             st.rerun()
