@@ -5,22 +5,43 @@ import json
 import requests
 
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Ramale Exam Center", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="HGC - Cirugía Plástica", page_icon="🏦", layout="wide")
 
-# --- 2. ESTILOS CSS PERSONALIZADOS (AZUL NAVY, DORADO, BLANCO) ---
+# --- 2. ESTILOS CSS BLINDADOS (SERIEDAD ACADÉMICA) ---
 st.markdown("""
     <style>
     /* Fondo principal marfil claro */
-    .stApp { 
-        background-color: #FAF9F6 !important; 
+    .stApp { background-color: #FAF9F6 !important; }
+    
+    /* === BARRA LATERAL (SIDEBAR) === */
+    [data-testid="stSidebar"] { 
+        background: linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(255,255,255,1) 15%, rgba(0,31,91,1) 25%, rgba(0,31,91,1) 100%) !important;
+        border-right: 1px solid #D4AF37 !important;
     }
     
-    /* Barra lateral Azul Navy */
-    [data-testid="stSidebar"] { 
-        background-color: #001F5B !important; 
-    }
-    [data-testid="stSidebar"] * { 
+    /* Contraste forzado para textos en la Sidebar (Azul Navy de fondo) */
+    [data-testid="stSidebar"] .stMarkdown p, 
+    [data-testid="stSidebar"] label, 
+    [data-testid="stSidebar"] h2, 
+    [data-testid="stSidebar"] h3 { 
         color: #FFFFFF !important; 
+        font-weight: 500 !important;
+    }
+    
+    /* Excepción: Título de 'Registro' en Dorado */
+    [data-testid="stSidebar"] h2#registro {
+        color: #D4AF37 !important;
+    }
+
+    /* === ÁREA PRINCIPAL === */
+    /* Texto del Examen: NEGRO INTENSO */
+    .main * { color: #000000 !important; }
+    
+    /* Títulos Institucionales Azul Navy */
+    h1, h2, h3, h4 { 
+        color: #001F5B !important; 
+        font-family: 'Georgia', serif !important;
+        font-weight: bold !important;
     }
     
     /* BOTÓN PRINCIPAL DORADO */
@@ -28,158 +49,104 @@ st.markdown("""
         background-color: #D4AF37 !important; 
         color: #001F5B !important; 
         font-weight: bold !important; 
-        border-radius: 8px !important;
+        border-radius: 4px !important;
         border: 2px solid #D4AF37 !important;
         width: 100%;
         transition: 0.3s;
+        text-transform: uppercase;
     }
     div.stButton > button:hover { 
         background-color: #FFFFFF !important; 
         color: #D4AF37 !important; 
     }
     
-    /* TEXTO DEL EXAMEN: NEGRO INTENSO PARA LECTURA CLARA */
-    .main * { 
-        color: #000000 !important; 
-    }
-    
-    /* Títulos Azul Navy con tipografía elegante */
-    h1, h2, h3, h4 { 
-        color: #001F5B !important; 
-        font-family: 'Georgia', serif !important;
-    }
-    
-    /* Estilo de los Radio Buttons y etiquetas */
+    /* Visibilidad de Radio Buttons y Preguntas (Negro) */
     div[data-testid="stMarkdownContainer"] p, 
     div[data-testid="stWidgetLabel"] p { 
         color: #000000 !important; 
-        font-size: 18px !important;
+        font-size: 19px !important;
+        line-height: 1.6 !important;
     }
     
-    /* Caja de métricas de resultados */
-    [data-testid="stMetricValue"] {
-        color: #001F5B !important;
+    /* Estilo de la Justificación (Retroalimentación) */
+    .stInfo {
+        background-color: #e3f2fd !important;
+        color: #0d47a1 !important;
+        border-left: 5px solid #D4AF37 !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. CONFIGURACIÓN DE ENDPOINTS (GOOGLE SHEETS) ---
+# --- 3. URL DE TU GOOGLE SHEET (Dra. Rafaela) ---
 URL_SHEET = "https://script.google.com/macros/s/AKfycbzcPskzds81UQjWfa1BEQpZZgeCB2vwQ-PajzYEpn31ynQ8-obawAnVIn9018uDh5o5/exec"
 
-# --- 4. BARRA LATERAL CON LOGOTIPO POR DEFAULT ---
+# --- 4. BARRA LATERAL CON LOGO DIFUMINADO ---
 with st.sidebar:
-    # Enlace directo al archivo Raw en tu GitHub
-    logo_default = "https://raw.githubusercontent.com/carloscpr2903-boop/mi-examen-ia/main/Logotipo%20Principal%20Sin%20Fondo%20(1).png"
-    st.image(logo_default, use_container_width=True)
+    # Contenedor del logo con fondo blanco (el CSS maneja el gradiente)
+    logo_url = "https://raw.githubusercontent.com/carloscpr2903-boop/mi-examen-ia/main/Logotipo%20Principal%20Sin%20Fondo%20(1).png"
+    st.image(logo_url, use_container_width=True)
     
-    st.markdown("---")
-    st.header("📋 Datos del Residente")
-    nombre_residente = st.text_input("Nombre Completo")
-    grado_residente = st.selectbox("Grado Académico", ["R1", "R2", "R3", "R4 (Jefe)"])
+    st.markdown("<br><h2 id='registro' style='text-align:center;'>REGISTRO</h2>", unsafe_allow_html=True)
+    nombre = st.text_input("Nombre Completo del Residente")
+    grado = st.selectbox("Grado Académico", ["R1", "R2", "R3", "R4 (Jefe)"])
     api_key = st.text_input("Gemini API Key", type="password").strip()
-    pdf_file = st.file_uploader("Subir Literatura Técnica (PDF)", type="pdf")
+    pdf_file = st.file_uploader("Cargar Literatura Base (PDF)", type="pdf")
 
-st.title("🎓 Ramale Exam Center v3.1")
-st.write(f"**Hospital General de Culiacán** | Especialidad en Cirugía Plástica y Reconstructiva")
+# --- 5. TÍTULO INSTITUCIONAL (SIN ICONOS GENERIQUOS) ---
+st.markdown("<h1 style='text-align: center; font-size: 32px;'>HGC - EVALUACIÓN DE ALTA ESPECIALIDAD EN CIRUGÍA PLÁSTICA Y RECONSTRUCTIVA</h1>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center; color: #D4AF37 !important;'>División de Estudios de Posgrado e Investigación</h3>", unsafe_allow_html=True)
+st.markdown("---")
 
-# --- 5. LÓGICA DE GENERACIÓN ---
-if pdf_file and api_key and nombre_residente:
+# --- 6. LÓGICA DE GENERACIÓN AUTÓNOMA ---
+if pdf_file and api_key and nombre:
     try:
         genai.configure(api_key=api_key)
-        
-        # Auto-detección de modelos disponibles
+        # Auto-detección de modelo disponible
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         model_name = next((m for m in models if "flash" in m), models[0])
         model = genai.GenerativeModel(model_name)
         
+        # Procesar PDF (Primeras 20 páginas para contexto técnico)
         reader = pypdf.PdfReader(pdf_file)
-        texto_base = "\n".join([page.extract_text() for page in reader.pages[:15]])
+        texto = "\n".join([p.extract_text() for p in reader.pages[:20]])
 
-        if st.button("🚀 INICIAR EVALUACIÓN DE GRADO"):
-            with st.spinner("Procesando literatura y diseñando reactivos..."):
+        if st.button("🚀 GENERAR EVALUACIÓN DE GRADO"):
+            with st.spinner("Analizando literatura quirúrgica y diseñando reactivos..."):
                 prompt = f"""
-                Eres un Sinodal experto. Basado en este contenido: {texto_base[:12000]}
-                Genera 9 preguntas de opción múltiple (3 Sencillas, 3 Moderadas, 3 Difíciles).
-                REGLAS:
-                - No uses 'según el texto'. Habla con autoridad médica.
-                - Formato JSON ESTRICTO:
+                Genera 9 preguntas de opción múltiple nivel Consejo basadas en: {texto[:14000]}
+                Estructura: 3 Sencillas, 3 Moderadas, 3 Difíciles. 
+                REGLAS DE SEGURIDAD:
+                1. No uses frases como 'según el texto' o 'basado en el autor'. Habla con autoridad clínica.
+                2. Formato JSON ESTRICTO: 
                 [
                   {{
-                    "id": 1,
-                    "nivel": "Sencilla",
-                    "pregunta": "...",
-                    "opciones": ["A) Opción 1", "B) Opción 2", "C) Opción 3", "D) Opción 4"],
-                    "correcta": "A",
-                    "justificacion": "..."
+                    "id":1, 
+                    "nivel":"Sencilla", 
+                    "pregunta":"...", 
+                    "opciones":["A)...","B)...","C)...","D)..."], 
+                    "correcta":"A", 
+                    "justificacion":"..."
                   }}
                 ]
                 """
-                response = model.generate_content(prompt)
-                clean_json = response.text.replace('```json', '').replace('```', '').strip()
-                st.session_state.examen_data = json.loads(clean_json)
-                st.session_state.user_answers = {}
-                st.success("Examen generado. Responda con precisión quirúrgica.")
-
+                res = model.generate_content(prompt)
+                st.session_state.examen_data = json.loads(res.text.replace('```json', '').replace('```', '').strip())
+                st.session_state.answers = {}
+                st.success("Evaluación generada con éxito. Responda con precisión.")
     except Exception as e:
-        st.error(f"Error de sistema: {e}")
+        st.error(f"Error en la conexión con la IA: {e}")
 
-# --- 6. DESPLIEGUE DEL EXAMEN ---
+# --- 7. EXAMEN Y EVALUACIÓN (LIMPIEZA DE PREGUNTAS) ---
 if 'examen_data' in st.session_state:
-    st.markdown("---")
-    for q in st.session_state.examen_data:
-        st.markdown(f"#### [{q['nivel']}] {q['id']}. {q['pregunta']}")
-        st.session_state.user_answers[q['id']] = st.radio(
-            "Seleccione su respuesta:", 
-            q['opciones'], 
-            key=f"q_{q['id']}", 
+    for item in st.session_state.examen_data:
+        # Pregunta limpia (sin prefijo de dificultad)
+        st.markdown(f"#### {item['id']}. {item['pregunta']}")
+        st.session_state.answers[item['id']] = st.radio(
+            "Seleccione:", 
+            item['opciones'], 
+            key=f"r_{item['id']}", 
             label_visibility="collapsed"
         )
         st.markdown("<br>", unsafe_allow_html=True)
 
-    if st.button("📊 FINALIZAR Y NOTIFICAR A JEFATURA"):
-        stats = {"Sencilla": 0, "Moderada": 0, "Difícil": 0}
-        log_errores = []
-
-        for q in st.session_state.examen_data:
-            # Calificación por texto exacto para evitar errores de letra
-            idx_correcta = ord(q['correcta']) - 65
-            texto_correcto = q['opciones'][idx_correcta]
-            
-            if st.session_state.user_answers[q['id']] == texto_correcto:
-                stats[q['nivel']] += 1
-            else:
-                log_errores.append(f"P{q['id']} ({q['nivel']}): {q['justificacion']}")
-
-        nota_final = round((sum(stats.values()) / 9) * 10, 1)
-        detalles_texto = " | ".join(log_errores) if log_errores else "Sin errores."
-
-        # Preparar envío a la Dra. Rafaela
-        payload = {
-            "nombre": nombre_residente,
-            "grado": grado_residente,
-            "calificacion": nota_final,
-            "sencillas": f"{stats['Sencilla']}/3",
-            "moderadas": f"{stats['Moderada']}/3",
-            "dificiles": f"{stats['Difícil']}/3",
-            "detalles_errores": detalles_texto
-        }
-
-        try:
-            requests.post(URL_SHEET, json=payload, timeout=10)
-            st.success(f"✅ Evaluación finalizada. Reporte enviado a la Dra. Rafaela.")
-        except:
-            st.warning("⚠️ Los resultados se calcularon, pero hubo un problema de conexión con la base de datos.")
-
-        # Resultados en pantalla
-        st.header(f"Calificación Final: {nota_final}/10")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Nivel Sencillo", payload["sencillas"])
-        c2.metric("Nivel Moderado", payload["moderadas"])
-        c3.metric("Nivel Difícil", payload["dificiles"])
-        
-        if log_errores:
-            st.subheader("Retroalimentación Técnica:")
-            for err in log_errores:
-                st.info(err)
-        else:
-            st.balloons()
+    if st.button("📊
