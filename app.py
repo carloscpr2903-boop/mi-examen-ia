@@ -4,18 +4,30 @@ import pypdf
 import json
 
 # 1. CONFIGURACIÓN VISUAL (ESTILO RAMALE)
-st.set_page_config(page_title="Ramale Exam Center", page_icon="🏥")
 st.markdown("""
     <style>
+    /* Fondo general */
     .stApp {background-color: #FAF9F6;}
-    .stButton>button {background-color: #B87333; color: white; font-weight: bold;}
-    /* Forzar color negro en todo el texto del examen */
-    p, span, label {color: #000000 !important; font-size: 18px !important;}
+    
+    /* Botón principal estilo Ramale */
+    .stButton>button {background-color: #B87333; color: white; font-weight: bold; width: 100%;}
+    
+    /* TEXTO DEL EXAMEN (Área Blanca): Forzar Negro */
+    .main .stMarkdown p, .main .stMarkdown b, .main label {
+        color: #000000 !important; 
+        font-size: 18px !important;
+    }
+    
+    /* TEXTO DE LA BARRA LATERAL (Área Oscura): Forzar Blanco/Gris */
+    section[data-testid="stSidebar"] .stMarkdown p, 
+    section[data-testid="stSidebar"] label, 
+    section[data-testid="stSidebar"] h2 {
+        color: #FFFFFF !important;
+    }
+    
     h1, h2, h3 {color: #5D4037 !important;}
     </style>
     """, unsafe_allow_html=True)
-
-st.title("🏥 Ramale Exam Center")
 st.subheader("Simulador Quirúrgico Personalizado")
 
 # 2. PANEL LATERAL
