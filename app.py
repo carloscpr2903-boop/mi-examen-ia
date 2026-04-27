@@ -62,8 +62,166 @@ div[data-testid="stRadio"] p { color: #111111 !important; }
 
 URL_SHEET = "https://script.google.com/macros/s/AKfycbzcPskzds81UQjWfa1BEQpZZgeCB2vwQ-PajzYEpn31ynQ8-obawAnVIn9018uDh5o5/exec"
 
+def extraer_texto_pdf(pdf_file):
+    try:
+        reader = pypdf.PdfReader(pdf_file)
+        texto = ""
+        for i, page in enumerate(reader.pages):
+            t = page.extract_text()
+            if t:
+                texto += f"\n--- Página {i+1} ---\n{t}"
+        return texto.strip()
+    except:
+        return None
+
+def limpiar_json(texto):
+    texto = re.sub(r'```json\s*', '', texto)
+    texto = re.sub(r'```\s*', '', texto)
+    texto = texto.strip()
+    match = re.search(r'\[[\s\S]*\]', texto)
+    return match.group(0) if match else texto
+
+def crear_base_conocimiento(textos_capitulos):
+    """FASE 1: Crea base de conocimiento estructurada de TODOS los capítulos"""
+    texto_completo = "\n\n===== NUEVO CAPÍTULO =====\n\n".join(textos_capitulos)
+    
+    prompt = f"""ERES UN EXPERTO EN CIRUGÍA PLÁSTICA DEL CONSEJO MEXICANO.
+
+ANALIZA COMPLETAMENTE ESTOS CAPÍTULOS:
+{texto_completo[:20000]}
+
+EXTRAE Y ESTRUCTURA LA INFORMACIÓN EN ESTOS 8 APARTADOS CLÍNICOS OBLIGATORIOS:
+
+1. DEFINICIÓN Y CONCEPTOS CLAVE: Qué es, términos clínicos exactos, sinónimos
+2. ANATOMÍA PERTINENTE: Estructuras anatómicas específicas, relaciones vasculonerviosas, planos quirúrgicos
+3. FISIOPATOLOGÍA: Mecanismos de enfermedad, cambios tisulares, progresión
+4. CLASIFICACIONES: Sistemas de clasificación específicos (Matarasso, Huger, etc.), grados, tipos
+5. TRATAMIENTO QUIRÚRGICO: Indicaciones exactas, contraindicaciones, técnicas específicas, paso a paso
+6. TRATAMIENTO NO QUIRÚRGICO: Alternativas médicas, cuándo NO operar, manejo conservador
+7. PRONÓSTICO Y COMPLICACIONES: Resultados esperados, complicaciones específicas, cómo resolverlas
+8. PROCEDIMIENTOS SECUNDARIOS: Complementos quirúrgicos, timing, cuándo y cómo aplicarlos
+
+RESPONDE ÚNICAMENTE EN JSON, SIN TEXTO ADICIONAL:
+
+{
+  "definicion": "texto exacto de definición y conceptos clave",
+  "anatomia": "detalles anatómicos pertinentes con precisión",
+  "fisiopatologia": "mecanismos de enfermedad y cambios tisulares",
+  "clasificaciones": "sistemas de clasificación específicos del tema",
+  "tratamiento_quirurgico": "indicaciones, contraindicaciones, técnicas detalladas",
+  "tratamiento_no_quirurgico": "opciones médicas, cuándo no operar",
+  "pronostico_complicaciones": "resultados, complicaciones, resolución",
+  "procedimientos_secundarios": "complementos, timing, aplicación"
+}"""
+
+    client = Groq(api_key=GROQ_API_KEY)
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=4000
+        )
+        raw = response.choices[0].message.content
+        limpio = limpiar_json(raw)
+        return json.loads(limpio)
+    except Exception as e:
+        raise Exception(f"Error análisis: {str(e)}")
+
+def generar_casos_clinicos(base_conocimiento, num_preguntas):
+    """FASE 2: Genera casos clínicos tipo CONSEJO basados en la base estructurada"""
+    
+    base = num_preguntas // 3
+    resto = num_preguntas % 3
+    n_sencilla = base + (1 if resto >= 1 else 0)
+    n_moderada = base + (1 if resto >= 2 else 0)
+    n_dificil = base
+
+    contexto = f"""
+DEFINICIÓN: {base_conocimiento.get('definicion', '')}
+ANATOMÍA: {base_conocimiento.get('anatomia', '')}
+FISIOPATOLOGÍA: {base_conocimiento.get('fisiopatologia', '')}
+CLASIFICACIONES: {base_conocimiento.get('clasificaciones', '')}
+TTO QUIRÚRGICO: {base_conocimiento.get('tratamiento_quirurgico', '')}
+TTO NO QUIRÚRGICO: {base_conocimiento.get('tratamiento_no_quirurgico', '')}
+PRONÓSTICO/COMPLICACIONES: {base_conocimiento.get('pronostico_complicaciones', '')}
+PROCEDIMIENTOS SECUNDARIOS: {base_conocimiento.get('procedimientos_secundarios', '')}
+"""
+
+    prompt = f"""ERES EXAMINADOR DEL CONSEJO MEXICANO DE CIRUGÍA PLÁSTICA.
+
+BASE DE CONOCIMIENTO ESTRUCTURADA:
+{contexto}
+
+GENERA EXACTAMENTE {num_preguntas} CASOS CLÍNICOS TIPO CONSEJO.
+
+ESTOS SON LOS TIPOS DE PREGUNTAS DEL CONSEJO - DEBES INCLUIR TODOS:
+
+SENCILLA ({n_sencilla} preguntas):
+- Diagnosis clínica directa (síntomas → patología)
+- Identificar hallazgos anatomopatológicos
+- Aplicar clasificaciones
+Ejemplo: "Paciente con laxitud abdominal post parto con diástasis de rectos, hernia y flacidez SMAS. ¿Cuál es la clasificación de Matarasso?"
+
+MODERADA ({n_moderada} preguntas):
+- Caso clínico que requiere: diagnóstico + fisiopatología + decisión terapéutica
+- Escoger entre quirúrgico vs no quirúrgico
+- Identificar indicaciones vs contraindicaciones
+Ejemplo: "Mujer 45 años, candidata a abdominoplastía pero con IMC 32, fumadora activa. ¿Cuál es la decisión correcta?"
+
+DIFÍCIL ({n_dificil} preguntas):
+- Caso complejo: diagnóstico + fisiopatología + anatomía + decisión quirúrgica + complicación
+- Aplicar procedimientos secundarios
+- Resolver complicaciones
+- Múltiples variables clínicas
+Ejemplo: "Paciente post abdominoplastía con dehiscencia de línea media, seroma y dolor persistente. ¿Cuál es la fisiopatología y el manejo?"
+
+REQUISITOS OBLIGATORIOS:
+
+1. CADA PREGUNTA DEBE INTEGRAR MÍNIMO 3 ELEMENTOS:
+   - Diagnóstico o identificación de patología
+   - Fisiopatología o anatomía pertinente
+   - Decisión terapéutica o complicación
+
+2. OPCIONES DEBEN SER CLÍNICAMENTE DISTINTAS (no triviales)
+
+3. JUSTIFICACIÓN DEBE CITAR:
+   - Definición/concepto aplicado
+   - Fisiopatología por qué es correcta
+   - Clasificación si aplica
+   - Por qué las otras opciones son incorrectas
+
+4. IDIOMA: ESPAÑOL PURO, SIN INGLÉS
+
+RESPONDE ÚNICAMENTE EN JSON VÁLIDO:
+
+[
+  {{
+    "id": 1,
+    "nivel": "Sencilla",
+    "caso": "DESCRIBE EL CASO CLÍNICO COMPLETO (edad, síntomas, hallazgos, historia)",
+    "pregunta": "¿CUÁL ES LA DIAGNOSIS O CLASIFICACIÓN CORRECTA?",
+    "opciones": ["A) [opción clínicamente diferente]", "B) [opción clínicamente diferente]", "C) [opción clínicamente diferente]", "D) [opción clínicamente diferente]"],
+    "correcta": "A",
+    "justificacion": "JUSTIFICACIÓN COMPLETA: [Definición/concepto]. [Fisiopatología por qué es correcta]. [Clasificación]. [Por qué A es correcta y las otras son incorrectas]."
+  }}
+]"""
+
+    client = Groq(api_key=GROQ_API_KEY)
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.6,
+            max_tokens=8000
+        )
+        raw = response.choices[0].message.content
+        limpio = limpiar_json(raw)
+        return json.loads(limpio)
+    except Exception as e:
+        raise Exception(f"Error generación casos: {str(e)}")
+
 def enviar_email_pdf(destinatario, nombre_residente, grado, nota, pdf_buffer):
-    """Envía el PDF por email a la Dra"""
     try:
         msg = MIMEMultipart()
         msg['From'] = GMAIL_USER
@@ -77,7 +235,7 @@ Grado: {grado}
 Calificación: {nota}/10
 Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}
 
-El PDF adjunto contiene el examen completo con soluciones y justificaciones.
+El PDF adjunto contiene el examen completo con casos clínicos, soluciones y justificaciones profundas.
 
 ---
 HGC - Hospital General de Culiacán
@@ -98,95 +256,6 @@ División de Cirugía Plástica, Estética y Reconstructiva
         return True, "PDF enviado correctamente"
     except Exception as e:
         return False, str(e)
-
-def extraer_texto_pdf(pdf_file):
-    try:
-        reader = pypdf.PdfReader(pdf_file)
-        texto = ""
-        for i, page in enumerate(reader.pages):
-            t = page.extract_text()
-            if t:
-                texto += f"\n--- Página {i+1} ---\n{t}"
-        return texto.strip()
-    except:
-        return None
-
-def limpiar_json(texto):
-    texto = re.sub(r'```json\s*', '', texto)
-    texto = re.sub(r'```\s*', '', texto)
-    texto = texto.strip()
-    match = re.search(r'\[[\s\S]*\]', texto)
-    return match.group(0) if match else texto
-
-def generar_preguntas_batch(textos_capitulos, num_preguntas, batch_num, total_batches):
-    """Genera preguntas 100% en español, SIN inglés"""
-    base = num_preguntas // 3
-    resto = num_preguntas % 3
-    n_sencilla = base + (1 if resto >= 1 else 0)
-    n_moderada = base + (1 if resto >= 2 else 0)
-    n_dificil = base
-
-    texto_completo = "\n\n===== NUEVA SECCIÓN =====\n\n".join(textos_capitulos)
-
-    prompt = f"""INSTRUCCIÓN CRÍTICA ABSOLUTA: Eres un experto evaluador del Consejo Mexicano de Cirugía Plástica.
-
-CONTENIDO DE LOS CAPÍTULOS (Batch {batch_num}/{total_batches}):
-{texto_completo[:18000]}
-
-GENERA EXACTAMENTE {num_preguntas} PREGUNTAS DE EXAMEN NIVEL CONSEJO.
-
-REQUISITOS ABSOLUTAMENTE OBLIGATORIOS - CUMPLE TODOS O FALLA:
-
-1. **IDIOMA ABSOLUTO**: ÚNICAMENTE ESPAÑOL. SIN PALABRAS EN INGLÉS. NI UNA PALABRA EN INGLÉS.
-   - Si el contenido tiene términos en inglés, TRADÚCELOS al español
-   - Ejemplo: "TRAM" → "Colgajo de músculo recto abdominal"
-   - Ejemplo: "SMAS" → "Sistema muscular superficial"
-
-2. **JUSTIFICACIONES EN ESPAÑOL PURO**:
-   - TRADUCE TODAS las citas al español
-   - PARAFRASEA todo en español claro
-   - NO copies texto en inglés
-   - Cada justificación MÍNIMO 4 oraciones en español
-
-3. **ESPECIFICIDAD CLÍNICA**:
-   - Cita conceptos específicos del contenido
-   - NO preguntas genéricas
-   - Opciones clínicamente diferentes
-
-4. **OPCIONES**:
-   - A, B, C, D DIFERENTES entre preguntas
-   - Distractores clínicamente plausibles
-   - UNA SOLA respuesta correcta
-
-5. **DISTRIBUCIÓN**:
-   - {n_sencilla} "Sencilla" (anatomía, indicaciones)
-   - {n_moderada} "Moderada" (decisiones clínicas)
-   - {n_dificil} "Difícil" (casos complejos)
-
-RESPONDE ÚNICAMENTE EN JSON VÁLIDO. SIN TEXTO ADICIONAL. SIN BACKTICKS:
-
-[
-  {{
-    "id": 1,
-    "nivel": "Sencilla",
-    "pregunta": "¿Cuál es [concepto en ESPAÑOL]?",
-    "opciones": ["A) [opción en ESPAÑOL]", "B) [opción en ESPAÑOL]", "C) [opción en ESPAÑOL]", "D) [opción en ESPAÑOL]"],
-    "correcta": "A",
-    "justificacion": "COMPLETAMENTE EN ESPAÑOL: [Explicación en español]. [Cita del contenido traducida al español]. [Por qué las otras son incorrectas]."
-  }}
-]"""
-
-    client = Groq(api_key=GROQ_API_KEY)
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.5,
-            max_tokens=6000
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        raise Exception(f"Error Groq batch {batch_num}: {str(e)}")
 
 def calcular_estadisticas(examen_data, answers):
     stats = {
@@ -213,6 +282,7 @@ def calcular_estadisticas(examen_data, answers):
         detalle.append({
             "id": item['id'],
             "nivel": nivel,
+            "caso": item.get('caso', ''),
             "pregunta": item['pregunta'],
             "opciones": item['opciones'],
             "opcion_correcta": opcion_correcta,
@@ -248,7 +318,7 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
 
     historia.append(Paragraph("HGC — EVALUACIÓN DE ALTA ESPECIALIDAD", titulo))
     historia.append(Paragraph("División de Cirugía Plástica, Estética y Reconstructiva", subtitulo))
-    historia.append(Paragraph("División de Estudios de Posgrado e Investigación", subtitulo))
+    historia.append(Paragraph("Casos Clínicos Nivel Consejo", subtitulo))
     historia.append(Spacer(1, 6))
     historia.append(HRFlowable(width="100%", thickness=2, color=DORADO))
     historia.append(Spacer(1, 8))
@@ -276,7 +346,7 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     historia.append(tabla_datos)
     historia.append(Spacer(1, 10))
 
-    historia.append(Paragraph("RESUMEN DE DESEMPEÑO POR NIVEL", 
+    historia.append(Paragraph("RESUMEN DE DESEMPEÑO", 
                              ParagraphStyle('Sec', fontName='Helvetica-Bold', fontSize=12, textColor=NAVY, spaceBefore=14, spaceAfter=6)))
     historia.append(HRFlowable(width="100%", thickness=1, color=DORADO))
     historia.append(Spacer(1, 6))
@@ -302,12 +372,13 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
     historia.append(tabla_stats)
     historia.append(PageBreak())
 
-    historia.append(Paragraph("EXAMEN COMPLETO CON SOLUCIONES", 
+    historia.append(Paragraph("CASOS CLÍNICOS CON SOLUCIONES", 
                              ParagraphStyle('Sec', fontName='Helvetica-Bold', fontSize=14, textColor=NAVY, spaceBefore=14, spaceAfter=6)))
     historia.append(HRFlowable(width="100%", thickness=2, color=DORADO))
     historia.append(Spacer(1, 10))
 
-    estilo_preg = ParagraphStyle('Preg', fontName='Helvetica-Bold', fontSize=11, textColor=NEGRO, spaceBefore=10, spaceAfter=4, leading=14)
+    estilo_caso = ParagraphStyle('Caso', fontName='Helvetica-Oblique', fontSize=10, textColor=NEGRO, leftIndent=12, spaceBefore=6, spaceAfter=4, leading=13, backColor=colors.HexColor('#F0F0F0'), borderPadding=6)
+    estilo_preg = ParagraphStyle('Preg', fontName='Helvetica-Bold', fontSize=11, textColor=NEGRO, spaceBefore=8, spaceAfter=4, leading=14)
     estilo_opcion = ParagraphStyle('Op', fontName='Helvetica', fontSize=10, textColor=NEGRO, leftIndent=16, spaceAfter=2, leading=13)
     estilo_opcion_correcta = ParagraphStyle('OpC', fontName='Helvetica-Bold', fontSize=10, textColor=VERDE, leftIndent=16, spaceAfter=2, leading=13)
     estilo_opcion_incorrecta = ParagraphStyle('OpI', fontName='Helvetica', fontSize=10, textColor=ROJO, leftIndent=16, spaceAfter=2, leading=13)
@@ -320,8 +391,15 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
         historia.append(Paragraph(f"<b>Pregunta {r['id']} | {r['nivel']} | {estado}</b>",
                                  ParagraphStyle(f'N{r["id"]}', fontName='Helvetica-Bold', fontSize=10,
                                                textColor=color_nivel, spaceBefore=10, spaceAfter=4)))
+        
+        # CASO CLÍNICO
+        if r['caso']:
+            historia.append(Paragraph(f"<b>CASO CLÍNICO:</b> {r['caso']}", estilo_caso))
+        
+        # PREGUNTA
         historia.append(Paragraph(r['pregunta'], estilo_preg))
 
+        # OPCIONES
         for opcion in r['opciones']:
             letra = opcion[0].upper() if opcion else ""
             letra_correcta = r['opcion_correcta'][0].upper() if r['opcion_correcta'] else ""
@@ -337,7 +415,7 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
                 historia.append(Paragraph(opcion, estilo_opcion))
 
         historia.append(Spacer(1, 4))
-        historia.append(Paragraph(f"<b>JUSTIFICACIÓN:</b> {r['justificacion']}", estilo_just))
+        historia.append(Paragraph(f"<b>JUSTIFICACIÓN DETALLADA:</b> {r['justificacion']}", estilo_just))
         historia.append(Spacer(1, 8))
         historia.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor('#DDDDDD')))
         historia.append(Spacer(1, 4))
@@ -357,13 +435,13 @@ def generar_pdf_examen(nombre, grado, examen_data, detalle, stats, nota, fecha):
 for key, val in {
     'capitulos': {},
     'bloques': {},
+    'base_conocimiento': None,
     'examen_data': None,
     'answers': {},
     'examen_enviado': False,
     'detalle_resultados': None,
     'stats_resultados': None,
-    'nota_final': None,
-    'bloque_actual': None
+    'nota_final': None
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
@@ -385,13 +463,13 @@ with st.sidebar:
         "Carga PDFs de capítulos",
         type="pdf",
         accept_multiple_files=True,
-        help="Carga todos los capítulos/PDFs que quieras"
+        help="Carga TODOS los capítulos del bloque"
     )
 
     if archivos_cargados:
         for pdf in archivos_cargados:
             nombre_cap = st.text_input(
-                f"Nombre del capítulo: {pdf.name[:30]}",
+                f"Nombre: {pdf.name[:25]}",
                 value=pdf.name.replace('.pdf', ''),
                 key=f"nombre_{pdf.name}"
             )
@@ -399,23 +477,23 @@ with st.sidebar:
                 texto = extraer_texto_pdf(pdf)
                 if texto:
                     st.session_state.capitulos[nombre_cap] = texto
-                    st.success(f"✅ {nombre_cap} cargado")
+                    st.success(f"✅ {nombre_cap}")
 
     if st.session_state.capitulos:
         st.markdown("---")
-        st.markdown("### 📋 Capítulos Cargados")
+        st.markdown("### 📋 Capítulos")
         for cap_name in st.session_state.capitulos.keys():
             st.write(f"✓ {cap_name}")
 
     st.markdown("---")
-    st.markdown("### 🎯 Organizar en Bloques")
+    st.markdown("### 🎯 Bloques")
     
-    nombre_bloque = st.text_input("Nombre del bloque", placeholder="ej: Bloque 1 - Facelift")
+    nombre_bloque = st.text_input("Nombre del bloque", placeholder="Ej: Facelift")
     
     if st.session_state.capitulos and nombre_bloque:
         capitulos_disponibles = list(st.session_state.capitulos.keys())
         capitulos_seleccionados = st.multiselect(
-            "Selecciona capítulos para este bloque",
+            "Selecciona capítulos",
             capitulos_disponibles,
             key=f"bloque_{nombre_bloque}"
         )
@@ -423,17 +501,17 @@ with st.sidebar:
         if st.button("➕ Crear Bloque", use_container_width=True):
             if capitulos_seleccionados:
                 st.session_state.bloques[nombre_bloque] = capitulos_seleccionados
-                st.success(f"✅ Bloque '{nombre_bloque}' creado")
+                st.success(f"✅ '{nombre_bloque}' creado")
                 st.rerun()
 
     if st.session_state.bloques:
         st.markdown("---")
-        st.markdown("### ✅ Bloques Creados")
+        st.markdown("### ✅ Bloques")
         for bloque_name, caps in st.session_state.bloques.items():
-            st.write(f"**{bloque_name}** ({len(caps)} capítulos)")
+            st.write(f"**{bloque_name}** ({len(caps)})")
 
     if not GROQ_API_KEY:
-        st.error("⚙️ API Key no configurada.")
+        st.error("⚙️ API Key no configurada")
 
 # ENCABEZADO
 st.markdown("""
@@ -442,7 +520,7 @@ st.markdown("""
         HGC — EVALUACIÓN DE ALTA ESPECIALIDAD
     </h1>
     <p style="color:#D4AF37; font-size:13px; letter-spacing:2px; text-transform:uppercase; margin:0;">
-        División de Cirugía Plástica, Estética y Reconstructiva · Estudios de Posgrado e Investigación
+        Sistema de Casos Clínicos Nivel Consejo
     </p>
 </div>
 <hr style="border:none; border-top:2px solid #D4AF37; margin:12px 0;">
@@ -453,120 +531,94 @@ if st.session_state.bloques:
     col1, col2, col3 = st.columns([1.5, 2, 1.5])
     
     with col1:
-        nombre = st.text_input("👤 Nombre del Residente", placeholder="Dr./Dra. Apellido Nombre")
+        nombre = st.text_input("👤 Residente", placeholder="Dr./Dra. Apellido Nombre")
     
     with col2:
         grado = st.selectbox("🎓 Grado", ["R1", "R2", "R3", "R4"])
     
     with col3:
         bloque_seleccionado = st.selectbox(
-            "📚 Selecciona Bloque",
+            "📚 Bloque",
             list(st.session_state.bloques.keys()),
             key="bloque_selector"
         )
 
     st.markdown("---")
 
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        num_preguntas = st.slider(
-            "📝 Número de preguntas",
-            min_value=3, max_value=300, value=9, step=3,
-            help="Hasta 300 preguntas"
-        )
-    
-    with col2:
-        if num_preguntas <= 30:
-            num_batches = 1
-        elif num_preguntas <= 100:
-            num_batches = max(1, num_preguntas // 30)
-        else:
-            num_batches = max(2, num_preguntas // 50)
-        
-        st.metric("Batches", f"{num_batches}")
-    
-    with col3:
-        st.metric("Preguntas", f"{num_preguntas}")
+    num_preguntas = st.slider(
+        "📝 Número de casos clínicos",
+        min_value=3, max_value=150, value=9, step=3,
+        help="Casos clínicos tipo Consejo"
+    )
 
     st.markdown("---")
 
-    generar = st.button("🚀 GENERAR EVALUACIÓN COMPLETA", use_container_width=True)
+    generar = st.button("🚀 GENERAR CASOS CLÍNICOS CONSEJO", use_container_width=True)
 
     if generar and bloque_seleccionado and nombre and GROQ_API_KEY:
         capitulos_bloque = st.session_state.bloques[bloque_seleccionado]
         textos_capitulos = [st.session_state.capitulos[cap] for cap in capitulos_bloque]
 
-        if num_preguntas <= 30:
-            num_batches = 1
-            pregs_por_batch = num_preguntas
-        else:
-            num_batches = max(1, (num_preguntas + 25) // 30)
-            pregs_por_batch = num_preguntas // num_batches
-
         error_msg = None
-        todas_preguntas = []
+        base_conocimiento = None
+        preguntas = None
 
-        with st.status(f"Generando {num_preguntas} preguntas en {num_batches} batches...", expanded=True) as status:
+        with st.status(f"Generando {num_preguntas} casos clínicos...", expanded=True) as status:
             try:
-                st.write(f"📚 Procesando {len(capitulos_bloque)} capítulos del bloque '{bloque_seleccionado}'...")
-                st.write(f"🧠 Generando en {num_batches} batches de ~{pregs_por_batch} preguntas cada uno...")
+                st.write(f"📚 Analizando {len(capitulos_bloque)} capítulos...")
+                st.write("🔍 FASE 1: Extrayendo base de conocimiento estructurada...")
+                st.write("  • Definición y conceptos clave")
+                st.write("  • Anatomía pertinente")
+                st.write("  • Fisiopatología")
+                st.write("  • Clasificaciones")
+                st.write("  • Tratamiento quirúrgico y no quirúrgico")
+                st.write("  • Pronóstico y complicaciones")
+                st.write("  • Procedimientos secundarios")
                 
-                for batch in range(1, num_batches + 1):
-                    st.write(f"⏳ Batch {batch}/{num_batches}...")
-                    
-                    for intento in range(3):
-                        try:
-                            raw = generar_preguntas_batch(
-                                textos_capitulos,
-                                pregs_por_batch,
-                                batch,
-                                num_batches
-                            )
-                            limpio = limpiar_json(raw)
-                            preguntas_batch = json.loads(limpio)
-                            
-                            if isinstance(preguntas_batch, list) and len(preguntas_batch) > 0:
-                                todas_preguntas.extend(preguntas_batch)
-                                st.write(f"✅ Batch {batch}: {len(preguntas_batch)} preguntas")
-                            else:
-                                raise ValueError("JSON inválido")
+                base_conocimiento = crear_base_conocimiento(textos_capitulos)
+                st.write("✅ Base de conocimiento creada")
+
+                st.write(f"📋 FASE 2: Generando {num_preguntas} casos clínicos tipo Consejo...")
+                
+                for intento in range(3):
+                    try:
+                        preguntas = generar_casos_clinicos(base_conocimiento, num_preguntas)
+                        if isinstance(preguntas, list) and len(preguntas) > 0:
+                            st.write(f"✅ {len(preguntas)} casos clínicos generados")
                             break
-                        except Exception as e:
-                            if intento < 2:
-                                st.write(f"⚠️ Reintentando batch {batch}... ({intento+2}/3)")
-                                time.sleep(2)
-                            else:
-                                raise Exception(f"Batch {batch} falló: {e}")
-                    
-                    time.sleep(1)
+                        else:
+                            raise ValueError("JSON inválido")
+                    except Exception as e:
+                        if intento < 2:
+                            st.write(f"⚠️ Reintentando... ({intento+2}/3)")
+                            time.sleep(2)
+                        else:
+                            raise Exception(f"Error después de 3 intentos: {e}")
 
-                for i, p in enumerate(todas_preguntas, 1):
-                    p['id'] = i
-
-                status.update(label=f"✅ {len(todas_preguntas)} preguntas generadas", state="complete")
+                status.update(label=f"✅ {len(preguntas)} casos generados", state="complete")
 
             except Exception as e:
-                status.update(label="❌ Error al generar", state="error")
+                status.update(label="❌ Error", state="error")
                 error_msg = str(e)
 
         if error_msg:
             st.error(f"❌ {error_msg}")
-        elif todas_preguntas:
-            st.session_state.examen_data = todas_preguntas
+        elif preguntas:
+            st.session_state.examen_data = preguntas
             st.session_state.answers = {}
+            st.session_state.base_conocimiento = base_conocimiento
             st.rerun()
 
 elif st.session_state.capitulos:
-    st.info("📋 Crea un bloque desde el panel izquierdo para comenzar")
+    st.info("📋 Crea un bloque para comenzar")
 else:
     st.markdown("""
     <div style="text-align:center; padding:60px 20px;">
         <div style="font-size:48px;">🏥</div>
         <p style="font-size:16px; color:#666; margin-top:16px;">
             <strong>Sistema de Evaluación HGC</strong><br><br>
-            Carga capítulos en el panel izquierdo, organízalos en bloques,<br>
-            y genera exámenes de cualquier extensión.
+            Carga capítulos, organízalos en bloques,<br>
+            y genera casos clínicos tipo Consejo Mexicano.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -578,7 +630,7 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
     total_preg = len(examen_data)
     respondidas = len([a for a in st.session_state.answers.values() if a])
 
-    st.markdown(f"**Progreso:** {respondidas}/{total_preg} preguntas respondidas")
+    st.markdown(f"**Progreso:** {respondidas}/{total_preg} casos respondidos")
     st.progress(respondidas / total_preg if total_preg > 0 else 0)
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -594,7 +646,7 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
                     box-shadow:0 2px 8px rgba(0,31,91,0.08);">
             <div style="font-size:11px; color:#D4AF37; font-weight:600; letter-spacing:2px;
                         text-transform:uppercase; margin-bottom:6px;">
-                Pregunta {item['id']} de {total_preg}
+                Caso {item['id']} de {total_preg}
             </div>
             <span style="display:inline-block; padding:2px 10px; border-radius:12px;
                          font-size:11px; font-weight:600; letter-spacing:1px;
@@ -602,7 +654,10 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
                          background:{color}22; color:{color};">
                 {nivel}
             </span>
-            <div style="font-size:16px; color:#001F5B; font-weight:600; line-height:1.5;">
+            <div style="font-size:13px; color:#666; line-height:1.6; margin-bottom:12px; padding:12px; background:#F9F9F9; border-radius:4px;">
+                <b>CASO CLÍNICO:</b> {item.get('caso', 'Sin caso disponible')}
+            </div>
+            <div style="font-size:15px; color:#001F5B; font-weight:600; line-height:1.5;">
                 {item['pregunta']}
             </div>
         </div>
@@ -622,15 +677,15 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
 
     st.markdown("---")
     if respondidas < total_preg:
-        st.warning(f"⚠️ {total_preg - respondidas} pregunta(s) sin responder.")
+        st.warning(f"⚠️ {total_preg - respondidas} caso(s) sin responder")
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        finalizar = st.button("📊 FINALIZAR Y ENVIAR A JEFATURA", use_container_width=True)
+        finalizar = st.button("📊 FINALIZAR Y ENVIAR", use_container_width=True)
 
     if finalizar:
         if respondidas < total_preg:
-            st.error("❌ Responde todas las preguntas antes de enviar.")
+            st.error("❌ Responde todos los casos antes de enviar")
         else:
             st.session_state.examen_enviado = True
             stats, detalle, nota, total_correctas, total_count = calcular_estadisticas(
@@ -664,65 +719,37 @@ if st.session_state.examen_data and not st.session_state.examen_enviado:
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("### 📊 Desempeño por Nivel")
+            st.markdown("### 📊 Desempeño")
             col1, col2, col3 = st.columns(3)
             for col, nivel in zip([col1, col2, col3], ['Sencilla', 'Moderada', 'Difícil']):
                 s = stats.get(nivel, {"correctas": 0, "total": 0})
                 pct = round((s["correctas"] / s["total"]) * 100) if s["total"] > 0 else 0
                 with col:
-                    st.metric(f"Nivel {nivel}", f"{s['correctas']}/{s['total']}", f"{pct}%")
+                    st.metric(f"{nivel}", f"{s['correctas']}/{s['total']}", f"{pct}%")
 
             st.markdown("---")
-            errores_resumen = [
-                f"P{r['id']} ({r['nivel']}): {r['pregunta'][:60]}..."
-                for r in detalle if not r['es_correcto']
-            ]
-            payload = {
-                "nombre": nombre, "grado": grado,
-                "fecha": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                "calificacion": nota,
-                "total_preguntas": total_count,
-                "total_correctas": total_correctas,
-                "total_incorrectas": total_count - total_correctas,
-                "sencillas": f"{stats['Sencilla']['correctas']}/{stats['Sencilla']['total']}",
-                "moderadas": f"{stats['Moderada']['correctas']}/{stats['Moderada']['total']}",
-                "dificiles": f"{stats['Difícil']['correctas']}/{stats['Difícil']['total']}",
-                "errores": " | ".join(errores_resumen) if errores_resumen else "Sin errores"
-            }
 
-            with st.spinner("📤 Enviando resultados a Jefatura..."):
-                try:
-                    requests.post(URL_SHEET, json=payload, timeout=15)
-                    st.success("✅ Resultados enviados a Jefatura.")
-                except:
-                    st.warning("⚠️ No se pudo enviar resultados a Google Sheets.")
-
-            # GENERAR Y ENVIAR PDF
-            st.markdown("---")
-            
-            with st.spinner("📄 Generando PDF y enviando a jefatura..."):
+            with st.spinner("📤 Enviando PDF a jefatura..."):
                 try:
                     fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
                     pdf_buffer = generar_pdf_examen(
                         nombre, grado, examen_data,
                         detalle, stats, nota, fecha_str
                     )
-
-                    # Enviar email
                     exito, msg = enviar_email_pdf(GMAIL_USER, nombre, grado, nota, pdf_buffer)
                     
                     if exito:
-                        st.success(f"✅ **PDF enviado exitosamente a jefatura**\n\n📧 Email: {GMAIL_USER}\n\n✓ El residente verá este mensaje de confirmación.\n✓ El PDF con el examen completo está en el email de jefatura.")
+                        st.success(f"✅ **PDF enviado a jefatura**")
                     else:
-                        st.warning(f"⚠️ Error al enviar PDF: {msg}")
+                        st.warning(f"⚠️ Error al enviar: {msg}")
 
                 except Exception as e:
-                    st.error(f"❌ Error al generar o enviar PDF: {e}")
+                    st.error(f"❌ Error: {e}")
 
             st.markdown("<br>", unsafe_allow_html=True)
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
-                if st.button("🔄 GENERAR NUEVO EXAMEN", use_container_width=True):
+                if st.button("🔄 NUEVO EXAMEN", use_container_width=True):
                     st.session_state.examen_data = None
                     st.session_state.answers = {}
                     st.session_state.examen_enviado = False
@@ -733,8 +760,7 @@ elif st.session_state.examen_enviado:
     <div style="text-align:center; padding:60px 20px;">
         <div style="font-size:48px;">✅</div>
         <p style="font-size:16px; color:#333; margin-top:16px;">
-            <strong>Examen enviado a Jefatura.</strong><br>
-            El PDF fue enviado al email de jefatura.
+            <strong>Examen enviado a Jefatura</strong>
         </p>
     </div>
     """, unsafe_allow_html=True)
