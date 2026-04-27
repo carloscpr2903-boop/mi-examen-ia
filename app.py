@@ -72,7 +72,40 @@ def limpiar_json(texto):
     match = re.search(r'\[[\s\S]*\]', texto)
     return match.group(0) if match else texto
 
-def generar_preguntas_batch(textos_capitulos, num_preguntas, batch_num, total_batches):
+def obtener_modelo_disponible(api_key):
+    """Detecta dinámicamente qué modelo está disponible en Groq"""
+    client = Groq(api_key=api_key)
+    
+    # Modelos preferidos en orden
+    modelos_preferidos = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-70b-versatile",
+        "llama-3.2-90b-vision-preview",
+        "mixtral-8x7b-32768",
+        "gemma-2-9b-it",
+    ]
+    
+    try:
+        # Obtener lista de modelos disponibles
+        modelos = client.models.list()
+        modelos_disponibles = [m.id for m in modelos]
+        
+        # Buscar el primer modelo preferido que esté disponible
+        for modelo in modelos_preferidos:
+            if modelo in modelos_disponibles:
+                return modelo
+        
+        # Si no hay preferido, usar el primero disponible
+        if modelos_disponibles:
+            return modelos_disponibles[0]
+        
+        # Fallback
+        return "llama-3.3-70b-versatile"
+    except:
+        # Si falla la detección, usar un modelo estable
+        return "llama-3.3-70b-versatile"
+
+def generar_preguntas_batch(textos_capitulos, num_preguntas, batch_num, total_batches, modelo):
     """Genera preguntas en batches para manejar exámenes largos"""
     base = num_preguntas // 3
     resto = num_preguntas % 3
@@ -124,7 +157,7 @@ RESPONDE ÚNICAMENTE EN JSON VÁLIDO. SIN TEXTO ADICIONAL. SIN BACKTICKS:
     client = Groq(api_key=GROQ_API_KEY)
     try:
         response = client.chat.completions.create(
-            model="llama-3.1-70b-versatile",
+            model=modelo,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
             max_tokens=6000
@@ -410,7 +443,7 @@ if st.session_state.bloques:
         nombre = st.text_input("👤 Nombre del Residente", placeholder="Dr./Dra. Apellido Nombre")
     
     with col2:
-        grado = st.selectbox("🎓 Grado", ["R1", "R2", "R3", "R4 (Jefe)"])
+        grado = st.selectbox("🎓 Grado", ["R1", "R2", "R3", "R4"])
     
     with col3:
         bloque_seleccionado = st.selectbox(
@@ -465,6 +498,10 @@ if st.session_state.bloques:
 
         with st.status(f"Generando {num_preguntas} preguntas en {num_batches} batches...", expanded=True) as status:
             try:
+                st.write(f"🔍 Detectando modelo disponible en Groq...")
+                modelo = obtener_modelo_disponible(GROQ_API_KEY)
+                st.write(f"✅ Usando modelo: {modelo}")
+                
                 st.write(f"📚 Procesando {len(capitulos_bloque)} capítulos del bloque '{bloque_seleccionado}'...")
                 st.write(f"🧠 Generando en {num_batches} batches de ~{pregs_por_batch} preguntas cada uno...")
                 
@@ -477,7 +514,8 @@ if st.session_state.bloques:
                                 textos_capitulos,
                                 pregs_por_batch,
                                 batch,
-                                num_batches
+                                num_batches,
+                                modelo
                             )
                             limpio = limpiar_json(raw)
                             preguntas_batch = json.loads(limpio)
